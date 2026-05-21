@@ -1,0 +1,365 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}LINE 綁定｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}One-Tap 綁定，Email + LINE 同步通知{% endblock %}
+
+{% block content %}
+
+{% set page_liff_id = liff_id or config.get("LINE_LIFF_ID", "") %}
+{% set page_line_admin_url = line_admin_url or config.get("LINE_ADMIN_URL", "") %}
+
+<section class="card">
+  <h2>LINE One-Tap 綁定</h2>
+  <p class="muted">
+    LINE 只用於接收通知，不用於登入、不建立帳號、不授權其他權限。
+    綁定成功後，重要通知會同時透過 Email 與 LINE 發送。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge">{{ ctx.role_label }}</span>
+
+    {% if ctx.target_code %}
+      <span class="badge ok">{{ ctx.target_code }}</span>
+    {% endif %}
+
+    {% if ctx.active %}
+      <span class="badge ok">LINE 已綁定</span>
+    {% else %}
+      <span class="badge warn">LINE 未綁定</span>
+    {% endif %}
+
+    {% if page_liff_id %}
+      <span class="badge ok">LIFF Ready</span>
+    {% else %}
+      <span class="badge danger">LIFF 未設定</span>
+    {% endif %}
+  </div>
+</section>
+
+{% if error %}
+<section class="card" style="background:#fff7ed;border-color:#fed7aa;">
+  <h2>目前無法綁定</h2>
+  <p class="muted">{{ error }}</p>
+  <a class="btn secondary" href="/">回首頁</a>
+</section>
+{% else %}
+
+  {% if ctx.binding %}
+  <section class="card">
+    <h2>目前綁定狀態</h2>
+
+    <p class="muted" style="line-height:1.8;">
+      通知代碼：<b>{{ ctx.binding.contact_code or '-' }}</b><br>
+      LINE 名稱：<b>{{ ctx.binding.line_display_name or '-' }}</b><br>
+      LINE User ID：
+      {% if ctx.binding.line_user_id %}
+        <b>{{ ctx.binding.line_user_id[:8] }}********</b>
+      {% else %}
+        <b>-</b>
+      {% endif %}
+      <br>
+      狀態：<b>{{ ctx.binding.status }}</b><br>
+      更新時間：{{ ctx.binding.updated_at or '-' }}
+    </p>
+
+    {% if ctx.active %}
+      <section class="card" style="background:#f0fdf4;border-color:#bbf7d0;">
+        <h3>綁定成功</h3>
+        <p class="muted">
+          之後付款、配送、Admin 回覆等重要通知，會在 Email 之外同步推送 LINE。
+        </p>
+      </section>
+    {% endif %}
+
+    <form method="post" action="/line/bind" style="margin-top:12px;">
+      <input type="hidden" name="action" value="unbind">
+      <button class="btn danger" type="submit">停用 LINE 綁定</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="card" style="background:#f0fdfa;border-color:#99f6e4;">
+    <h2>{% if ctx.active %}重新綁定 LINE{% else %}一鍵綁定 LINE{% endif %}</h2>
+
+    <p class="muted">
+      按下按鈕後，系統會開啟 LINE LIFF 授權。
+      授權完成後，FUMAP GO 會自動取得您的 LINE userId 並綁定目前登入的帳號。
+    </p>
+
+    <button
+      class="btn"
+      type="button"
+      id="oneTapBindBtn"
+      style="width:100%;min-height:64px;font-size:20px;font-weight:950;background:#06C755;color:#fff;"
+      {% if not page_liff_id %}disabled{% endif %}
+    >
+      一鍵綁定 LINE
+    </button>
+
+    <p class="muted" id="bindStatusText" style="margin-top:12px;">
+      {% if page_liff_id %}
+        請使用 LINE App 或手機瀏覽器開啟。若尚未登入 LINE，系統會引導登入。
+      {% else %}
+        尚未設定 LINE_LIFF_ID，請先在 Render ENV 加入 LINE_LIFF_ID。
+      {% endif %}
+    </p>
+
+    <pre
+      id="bindDebugBox"
+      style="white-space:pre-wrap;background:#f8fafc;border-radius:14px;padding:12px;display:none;font-size:12px;"
+    ></pre>
+  </section>
+
+  <section class="card">
+    <h2>通知規則</h2>
+    <p class="muted">
+      綁定成功後：
+    </p>
+
+    <div class="info-grid">
+      <div>
+        <span class="muted">您會收到</span>
+        <b>Email + LINE</b>
+      </div>
+
+      <div>
+        <span class="muted">Admin 會收到</span>
+        <b>Email + LINE</b>
+      </div>
+
+      <div>
+        <span class="muted">轉帳付款</span>
+        <b>Email 驗證為主</b>
+      </div>
+
+      <div>
+        <span class="muted">LINE 綁定</span>
+        <b>通知加強</b>
+      </div>
+    </div>
+
+    <p class="muted">
+      LINE 綁定不是登入方式，也不會取代 Email 驗證。
+      BANK_TRANSFER 仍以 Email verified 作為條件。
+    </p>
+  </section>
+
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+    <h2>LIFF 失敗時</h2>
+    <p class="muted">
+      若 LIFF 無法開啟或授權失敗，可以通知 Admin 協助。
+      此備援不會自動取得您的 LINE userId，只是通知 Admin 聯絡您。
+    </p>
+
+    <button class="btn secondary" type="button" id="fallbackAdminBtn">
+      通知 Admin 協助綁定
+    </button>
+
+    {% if page_line_admin_url %}
+      <a class="btn secondary" target="_blank" href="{{ page_line_admin_url }}" style="margin-top:10px;">
+        開啟 LINE Admin
+      </a>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>測試推播</h2>
+    <p class="muted">
+      綁定成功後，可以用這個按鈕測試 LINE Gateway 是否能推播。
+      若 Gateway 尚未接好，資料仍會保存，不影響帳號權限。
+    </p>
+
+    <button class="btn secondary" type="button" onclick="testPush()">發送測試通知</button>
+
+    <pre
+      id="pushResult"
+      style="white-space:pre-wrap;background:#f8fafc;border-radius:14px;padding:12px;display:none;"
+    ></pre>
+  </section>
+
+{% endif %}
+
+<section class="card">
+  <h2>角色規則</h2>
+  <p class="muted">
+    CUSTOMER：CUS-{user_id} / CUM contact code。<br>
+    STORE：store_code / STRO contact code。<br>
+    DRIVER：driver_code / DRV contact code。<br>
+    ADMIN：ADMIN / ADM contact code。<br><br>
+    這些 code 只用於 LINE 推播，不是登入帳號、不是權限、不是店家/shiper 營運代碼。
+  </p>
+</section>
+
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+<script>
+(function(){
+  const LIFF_ID = "{{ page_liff_id }}";
+  const bindBtn = document.getElementById("oneTapBindBtn");
+  const statusText = document.getElementById("bindStatusText");
+  const debugBox = document.getElementById("bindDebugBox");
+  const fallbackBtn = document.getElementById("fallbackAdminBtn");
+
+  function setStatus(message, isError){
+    if (statusText) {
+      statusText.textContent = message;
+      statusText.style.color = isError ? "#991b1b" : "";
+      statusText.style.fontWeight = isError ? "800" : "";
+    }
+  }
+
+  function showDebug(data){
+    if (!debugBox) {
+      return;
+    }
+
+    debugBox.style.display = "block";
+
+    if (typeof data === "string") {
+      debugBox.textContent = data;
+    } else {
+      debugBox.textContent = JSON.stringify(data, null, 2);
+    }
+  }
+
+  async function postOneTapBind(profile){
+    const res = await fetch("/line/bind/one-tap", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        line_user_id: profile.userId,
+        line_display_name: profile.displayName || "",
+        picture_url: profile.pictureUrl || ""
+      })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "LINE 綁定失敗");
+    }
+
+    return data;
+  }
+
+  async function doOneTapBind(){
+    if (!LIFF_ID) {
+      setStatus("尚未設定 LINE_LIFF_ID，無法使用一鍵綁定。", true);
+      return;
+    }
+
+    if (!window.liff) {
+      setStatus("LIFF SDK 載入失敗，請稍後再試。", true);
+      return;
+    }
+
+    try {
+      bindBtn.disabled = true;
+      bindBtn.textContent = "LINE 授權中...";
+      setStatus("正在開啟 LINE 授權，請稍候。", false);
+
+      await liff.init({ liffId: LIFF_ID });
+
+      if (!liff.isLoggedIn()) {
+        setStatus("尚未登入 LINE，正在跳轉登入。", false);
+        liff.login({
+          redirectUri: window.location.href
+        });
+        return;
+      }
+
+      const profile = await liff.getProfile();
+
+      if (!profile || !profile.userId || !profile.userId.startsWith("U")) {
+        throw new Error("無法取得有效 LINE userId。");
+      }
+
+      setStatus("已取得 LINE 身分，正在綁定 FUMAP GO 帳號。", false);
+
+      const result = await postOneTapBind(profile);
+
+      setStatus("LINE 綁定成功。之後重要通知會同步透過 Email 與 LINE 發送。", false);
+      showDebug(result);
+
+      bindBtn.textContent = "綁定成功，重新整理中...";
+
+      setTimeout(function(){
+        window.location.href = "/line/bind";
+      }, 1000);
+
+    } catch (err) {
+      setStatus(String(err.message || err), true);
+      showDebug(String(err.stack || err));
+      bindBtn.disabled = false;
+      bindBtn.textContent = "重新嘗試一鍵綁定 LINE";
+    }
+  }
+
+  async function fallbackAdminRequest(){
+    if (!fallbackBtn) {
+      return;
+    }
+
+    try {
+      fallbackBtn.disabled = true;
+      fallbackBtn.textContent = "通知 Admin 中...";
+
+      const res = await fetch("/line/bind/request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({})
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "通知 Admin 失敗");
+      }
+
+      setStatus("已通知 Admin 協助綁定。", false);
+      showDebug(data);
+      fallbackBtn.textContent = "已通知 Admin";
+
+    } catch (err) {
+      fallbackBtn.disabled = false;
+      fallbackBtn.textContent = "通知 Admin 協助綁定";
+      setStatus(String(err.message || err), true);
+      showDebug(String(err.stack || err));
+    }
+  }
+
+  if (bindBtn) {
+    bindBtn.addEventListener("click", doOneTapBind);
+  }
+
+  if (fallbackBtn) {
+    fallbackBtn.addEventListener("click", fallbackAdminRequest);
+  }
+})();
+
+async function testPush(){
+  const box = document.getElementById("pushResult");
+  box.style.display = "block";
+  box.textContent = "sending...";
+
+  try {
+    const res = await fetch("/line/api/test-push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({})
+    });
+
+    const data = await res.json();
+    box.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    box.textContent = String(err);
+  }
+}
+</script>
+{% endblock %}

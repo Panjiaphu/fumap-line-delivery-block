@@ -1,0 +1,130 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}店家帳號審核｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}店家資料、商品準備與審核狀態{% endblock %}
+
+{% block content %}
+<section class="hero">
+  {% if status == "PENDING_APPROVAL" %}
+    <h2>店家帳號等待審核</h2>
+    <p>
+      你的店家帳號正在等待 Admin 檢查。審核通過前，暫時不能接單、
+      不能建立配送單，也不會啟用新訂單鈴聲。
+    </p>
+  {% elif status == "REJECTED" %}
+    <h2>店家帳號未通過審核</h2>
+    <p>
+      你的店家帳號目前未通過審核。請確認店家資料是否完整，或聯絡 Admin 確認原因。
+    </p>
+  {% elif status == "SUSPENDED" %}
+    <h2>店家帳號已暫停</h2>
+    <p>
+      你的店家帳號目前已暫停使用，暫時不能接單或建立配送單。
+    </p>
+  {% else %}
+    <h2>店家帳號目前不可使用</h2>
+    <p>
+      你的店家帳號目前不是可營運狀態，請聯絡 Admin 確認。
+    </p>
+  {% endif %}
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge">{{ store.store_code }}</span>
+    <span class="badge warn">{{ status or "UNKNOWN" }}</span>
+    {% if store.setup_completed %}
+      <span class="badge ok">已設定</span>
+    {% else %}
+      <span class="badge warn">未完成設定</span>
+    {% endif %}
+  </div>
+</section>
+
+{% if store.status_reason %}
+<section class="card" style="border-color:#fde68a;background:#fffbeb;">
+  <h2>審核備註</h2>
+  <p class="muted">{{ store.status_reason }}</p>
+</section>
+{% endif %}
+
+{% if status == "PENDING_APPROVAL" %}
+<section class="card">
+  <h2>等待審核期間可以先完成</h2>
+  <p class="muted">
+    Admin 審核前，你可以先準備店家資料與商品資料。資料越完整，後續測試與正式營運越順。
+  </p>
+
+  <div class="menu-grid">
+    <a href="/store/setup">
+      <b>店家設定</b>
+      <span>店名、電話、地址、GPS、營業狀態、介紹</span>
+    </a>
+
+    <a href="/store/products">
+      <b>商品管理</b>
+      <span>新增商品、價格、圖片、上下架</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>LINE 綁定</b>
+      <span>綁定後可接收平台通知</span>
+    </a>
+
+    <a href="/store/contract">
+      <b>合約 / 文件</b>
+      <span>查看或簽署店家合作條款</span>
+    </a>
+  </div>
+</section>
+
+<section class="card" style="border-color:#fecaca;background:#fef2f2;">
+  <h2>尚未開放的功能</h2>
+  <p class="muted">
+    審核通過前，店家不能接收新訂單，不能建立配送單，也不會啟用新訂單 ringbell。
+  </p>
+</section>
+
+{% elif status == "REJECTED" %}
+<section class="card" style="border-color:#fecaca;background:#fef2f2;">
+  <h2>需要補充或修正資料</h2>
+  <p class="muted">
+    {% if store.status_reason %}
+      原因：{{ store.status_reason }}
+    {% else %}
+      請聯絡 Admin 確認原因。
+    {% endif %}
+  </p>
+
+  <div class="grid-2">
+    <a class="btn" href="/store/setup">修改店家資料</a>
+    <a class="btn secondary" href="/line/bind">LINE 綁定</a>
+  </div>
+</section>
+
+{% elif status == "SUSPENDED" %}
+<section class="card" style="border-color:#fecaca;background:#fef2f2;">
+  <h2>帳號暫停中</h2>
+  <p class="muted">
+    {% if store.status_reason %}
+      原因：{{ store.status_reason }}
+    {% else %}
+      此店家帳號目前已暫停，請聯絡 Admin 確認。
+    {% endif %}
+  </p>
+
+  <a class="btn secondary" href="/line/bind">LINE 綁定 / 聯絡用</a>
+</section>
+
+{% else %}
+<section class="card" style="border-color:#e5e7eb;background:#f8fafc;">
+  <h2>目前狀態</h2>
+  <p class="muted">
+    狀態：{{ status or "UNKNOWN" }}<br>
+    請聯絡 Admin 確認帳號狀態。
+  </p>
+</section>
+{% endif %}
+
+<section class="card">
+  <a class="btn secondary" href="/logout">登出</a>
+</section>
+{% endblock %}

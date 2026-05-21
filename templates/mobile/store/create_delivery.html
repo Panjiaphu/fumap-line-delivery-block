@@ -1,0 +1,325 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}建立配送單｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}店家為自己的客戶呼叫 Shiper{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h2>建立配送單 / 呼叫 Shiper</h2>
+  <p>
+    適用於客戶直接向店家下單，但店家需要 Shiper 協助配送的情境。
+    建立後訂單會直接進入 WAITING_DRIVER。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge">{{ store.store_code }}</span>
+    <span class="badge">{{ store.store_name }}</span>
+    <span class="badge">{{ store.area_label or '中壢區' }}</span>
+    <span class="badge">{{ store.city_block or 'ZHONGLI' }}</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>7H 配送規則</h2>
+  <p class="muted">
+    店家配送單會使用 GPS 或距離級距計算配送費。<br>
+    店家不可手動決定配送費；系統會依 0–2 / 3–4 / 5–6 公里規則自動計算。
+  </p>
+
+  <div class="fee-preview-table">
+    <div>
+      <span>0–2 公里</span>
+      <b>配送 40｜客戶 30｜店家支援 10</b>
+    </div>
+    <div>
+      <span>3–4 公里</span>
+      <b>配送 60｜客戶 45｜店家支援 15</b>
+    </div>
+    <div>
+      <span>5–6 公里</span>
+      <b>配送 80｜客戶 60｜店家支援 20</b>
+    </div>
+  </div>
+
+  <p class="muted">
+    客戶付款金額 = 商品金額 + 客戶配送分攤 + 困難配送加價。<br>
+    困難配送加價每筆最多 +20 TWD，不重複累加。
+  </p>
+
+  {% if rain_surcharge_enabled %}
+    <p>
+      <span class="badge warn">
+        雨天困難配送已由 Admin 啟用
+      </span>
+    </p>
+    <p class="muted">
+      雨天本身會列入困難配送條件；即使同時有上樓、地址難找或重物，每筆訂單仍最多只加收 20 TWD。
+    </p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>配送單資料</h2>
+
+  <form method="post" id="storeManualDeliveryForm">
+    <div class="form-group">
+      <label>訂單名稱 / 商品摘要</label>
+      <input
+        name="manual_order_title"
+        required
+        placeholder="例如：燒臘便當 2 份 / 飲料 4 杯"
+      >
+    </div>
+
+    <div class="grid-2">
+      <div class="form-group">
+        <label>客戶姓名</label>
+        <input name="customer_name" required placeholder="客戶姓名">
+      </div>
+
+      <div class="form-group">
+        <label>客戶電話</label>
+        <input name="customer_phone" required placeholder="09xx-xxx-xxx">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>商品金額 TWD</label>
+      <input name="subtotal_twd" type="number" min="1" required placeholder="200">
+      <p class="muted">此金額為商品金額，不包含配送費。配送費會由系統依距離規則計算。</p>
+    </div>
+
+    <div class="form-group">
+      <label>送達地址</label>
+      <input name="delivery_address" required placeholder="桃園市中壢區... / 桃園市桃園區...">
+      <p class="muted">GPS 用於距離估算，地址文字仍必須填寫，方便 Shiper 確認。</p>
+    </div>
+
+    <div class="grid-2">
+      <div class="form-group">
+        <label>樓層</label>
+        <input name="floor_number" required placeholder="1樓 / 2樓 / 無電梯">
+      </div>
+
+      <div class="form-group">
+        <label>配送區域</label>
+        <select name="city_block" required>
+          <option value="ZHONGLI" {% if (store.city_block or 'ZHONGLI') == 'ZHONGLI' %}selected{% endif %}>
+            中壢區 / ZHONGLI
+          </option>
+          <option value="TAOYUAN" {% if store.city_block == 'TAOYUAN' %}selected{% endif %}>
+            桃園區 / TAOYUAN
+          </option>
+        </select>
+        <p class="muted">
+          預設使用店家所在區域：
+          <b>{{ store.area_label or '中壢區' }} / {{ store.city_block or 'ZHONGLI' }}</b>。<br>
+          此區域會決定哪些 Shiper 能看到此配送單。
+        </p>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>地址備註</label>
+      <textarea name="address_note" placeholder="例如：請按門鈴、電梯在右側、警衛室代收"></textarea>
+    </div>
+
+    <section class="gps-panel manual-delivery-gps">
+      <div>
+        <h3>客戶 GPS 位置</h3>
+        <p>
+          請在客戶收貨地點附近按「取得客戶位置」。若無法定位，請手動選擇距離級距。
+          後端會優先使用 GPS；GPS 不足時才使用距離級距。
+        </p>
+      </div>
+
+      <input type="hidden" id="deliveryLatInput" name="delivery_lat" value="0">
+      <input type="hidden" id="deliveryLngInput" name="delivery_lng" value="0">
+
+      <button type="button" class="btn secondary" id="getDeliveryGpsBtn">
+        取得客戶位置
+      </button>
+
+      <div class="gps-readout" id="deliveryGpsReadout">
+        尚未取得客戶座標。
+      </div>
+
+      <p class="gps-help" id="deliveryGpsHelp">
+        若手機沒有跳出位置權限，請確認瀏覽器允許定位。
+      </p>
+    </section>
+
+    <div class="form-group">
+      <label>配送距離級距</label>
+      <select name="distance_band" id="distanceBandSelect">
+        <option value="0-2KM">0–2 公里｜配送費 40｜客戶 30｜店家支援 10</option>
+        <option value="3-4KM">3–4 公里｜配送費 60｜客戶 45｜店家支援 15</option>
+        <option value="5-6KM">5–6 公里｜配送費 80｜客戶 60｜店家支援 20</option>
+        <option value="OVER_6KM">超過 6 公里｜請聯絡 Admin 處理</option>
+      </select>
+      <p class="muted">
+        若已取得 GPS，系統會優先用 GPS 計算配送距離；若 GPS 不足，才使用此距離級距。
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label>困難配送條件</label>
+      <p class="muted">符合任一條件時，每筆訂單最多只加收 20 TWD，不重複累加。</p>
+
+      <label class="check-row">
+        <input type="checkbox" name="difficulty_flags" value="DIFFICULT_LOCATION">
+        <span>地址難找 / 巷弄複雜</span>
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" name="difficulty_flags" value="SHOPPING_MALL_CENTER">
+        <span>商場 / 百貨 / 大樓內部</span>
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" name="difficulty_flags" value="REMOTE_AREA">
+        <span>偏遠 / 非中心區</span>
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" name="difficulty_flags" value="HEAVY_ITEM">
+        <span>重物 / 大量</span>
+      </label>
+    </div>
+
+    <div class="form-group">
+      <label>店家補充困難配送原因</label>
+      <input name="manual_extra_reason" placeholder="例如：社區入口難找、需等警衛、特殊搬運">
+      <p class="muted">填寫原因只會啟用困難配送 +20，一筆訂單仍最多只加收一次。</p>
+    </div>
+
+    <div class="form-group">
+      <label>付款方式</label>
+      <select name="payment_type">
+        <option value="COD">貨到付款 COD：Shiper 到店先付商品款</option>
+        <option value="PREPAID_TO_STORE">客戶已付款給店家</option>
+        <option value="BANK_TRANSFER_ADMIN">客戶轉帳給 Admin</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>交付方式</label>
+      <select name="delivery_method">
+        <option value="FACE_TO_FACE">當面交付</option>
+        <option value="PHOTO_PROOF">拍照完成</option>
+      </select>
+      <p class="muted">若選擇拍照完成，Shiper 送達時必須提供完成交付證明。</p>
+    </div>
+
+    <div class="form-group">
+      <label>訂單備註</label>
+      <textarea name="note" placeholder="給 Shiper 或 Admin 的補充資訊"></textarea>
+    </div>
+
+    <section class="card store-manual-note">
+      <h3>建立後流程</h3>
+      <p>
+        送出後狀態會直接成為 <b>WAITING_DRIVER</b>。<br>
+        同區域 Shiper 開啟接單頁後會看到此單，並可使用 Google Maps 導航取貨與送達。
+      </p>
+    </section>
+
+    <button class="btn" type="submit">建立配送單 / 呼叫 Shiper</button>
+  </form>
+</section>
+
+<section class="grid-2">
+  <a class="btn secondary" href="/store">回店家工作台</a>
+  <a class="btn secondary" href="/store/orders">查看訂單</a>
+</section>
+
+<script>
+(function(){
+  const gpsBtn = document.getElementById("getDeliveryGpsBtn");
+  const latInput = document.getElementById("deliveryLatInput");
+  const lngInput = document.getElementById("deliveryLngInput");
+  const readout = document.getElementById("deliveryGpsReadout");
+  const help = document.getElementById("deliveryGpsHelp");
+  const form = document.getElementById("storeManualDeliveryForm");
+  const distanceBand = document.getElementById("distanceBandSelect");
+
+  if (!gpsBtn || !latInput || !lngInput || !readout) {
+    return;
+  }
+
+  function setMessage(message, isError){
+    readout.textContent = message;
+    readout.classList.toggle("gps-error", !!isError);
+  }
+
+  gpsBtn.addEventListener("click", function(){
+    if (!navigator.geolocation) {
+      setMessage("此瀏覽器不支援定位，請改用手機 Chrome 或 Safari。", true);
+      return;
+    }
+
+    gpsBtn.disabled = true;
+    gpsBtn.textContent = "定位中...";
+    setMessage("正在取得客戶位置，請允許瀏覽器定位。", false);
+
+    navigator.geolocation.getCurrentPosition(
+      function(position){
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        latInput.value = lat.toFixed(7);
+        lngInput.value = lng.toFixed(7);
+
+        setMessage(
+          "目前座標：" + lat.toFixed(6) + ", " + lng.toFixed(6) +
+          "｜誤差約 " + Math.round(accuracy) + " 公尺",
+          false
+        );
+
+        if (help) {
+          help.textContent = "定位已取得。送出後系統會優先用 GPS 計算配送距離。";
+        }
+
+        gpsBtn.disabled = false;
+        gpsBtn.textContent = "重新取得客戶位置";
+      },
+      function(error){
+        let message = "定位失敗。";
+
+        if (error.code === 1) {
+          message = "定位被拒絕。請允許瀏覽器定位權限，或手動選擇距離級距。";
+        } else if (error.code === 2) {
+          message = "目前無法取得位置，請確認 GPS 或網路狀態，或手動選擇距離級距。";
+        } else if (error.code === 3) {
+          message = "定位逾時，請再試一次，或手動選擇距離級距。";
+        }
+
+        setMessage(message, true);
+
+        if (help) {
+          help.textContent = "若無法定位，系統會使用你選擇的配送距離級距。";
+        }
+
+        gpsBtn.disabled = false;
+        gpsBtn.textContent = "取得客戶位置";
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 30000
+      }
+    );
+  });
+
+  if (form && distanceBand) {
+    form.addEventListener("submit", function(event){
+      if (distanceBand.value === "OVER_6KM") {
+        event.preventDefault();
+        alert("超過 6 公里目前不自動建立配送單，請聯絡 Admin 處理。");
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

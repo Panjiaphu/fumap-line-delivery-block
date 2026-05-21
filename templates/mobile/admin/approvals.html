@@ -1,0 +1,157 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}帳號審核中心｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}審核 Store / Shiper 帳號狀態{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h2>帳號審核中心</h2>
+  <p>
+    審核新店家與 Shiper。未通過審核前，店家不能接單，Shiper 不能上線接單。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge warn">Store {{ approval_stores|length }}</span>
+    <span class="badge warn">Shiper {{ approval_drivers|length }}</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>店家等待審核 / 暫停 / 未通過</h2>
+
+  {% for s in approval_stores %}
+    <section class="card" style="margin-top:12px;">
+      <h3>{{ s.store_name or '未命名店家' }}</h3>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+        <span class="badge">{{ s.store_code }}</span>
+
+        {% if s.status == "PENDING_APPROVAL" %}
+          <span class="badge warn">{{ s.status }}</span>
+        {% elif s.status == "SUSPENDED" %}
+          <span class="badge danger">{{ s.status }}</span>
+        {% elif s.status == "REJECTED" %}
+          <span class="badge danger">{{ s.status }}</span>
+        {% else %}
+          <span class="badge">{{ s.status or 'UNKNOWN' }}</span>
+        {% endif %}
+
+        <span class="badge">{{ s.city_block or 'ZHONGLI' }}</span>
+        <span class="badge">{{ s.area_label or '中壢區' }}</span>
+
+        {% if s.setup_completed %}
+          <span class="badge ok">已設定</span>
+        {% else %}
+          <span class="badge warn">未完成設定</span>
+        {% endif %}
+      </div>
+
+      <p class="muted">
+        電話：{{ s.phone or '-' }}<br>
+        地址：{{ s.address or '-' }}<br>
+        建立：{{ s.created_at or '-' }}<br>
+        更新：{{ s.updated_at or '-' }}<br>
+        通過時間：{{ s.approved_at or '-' }}<br>
+        備註：{{ s.status_reason or '-' }}
+      </p>
+
+      <form method="post" action="/admin/stores/{{ s.store_code }}/approval">
+        <input
+          name="reason"
+          placeholder="原因 / 備註"
+          value="{{ s.status_reason or '' }}"
+          style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:12px;margin-bottom:10px;"
+        >
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          {% if s.status == "PENDING_APPROVAL" %}
+            <button class="btn" name="action" value="approve">通過審核</button>
+            <button class="btn danger" name="action" value="reject">不通過</button>
+          {% elif s.status == "REJECTED" %}
+            <button class="btn" name="action" value="reactivate">重新啟用</button>
+            <button class="btn danger" name="action" value="suspend">暫停</button>
+          {% elif s.status == "SUSPENDED" %}
+            <button class="btn" name="action" value="reactivate">重新啟用</button>
+          {% else %}
+            <button class="btn" name="action" value="approve">設為通過</button>
+          {% endif %}
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <p class="muted">目前沒有需要審核的店家。</p>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Shiper 等待審核 / 暫停 / 未通過</h2>
+
+  {% for d in approval_drivers %}
+    <section class="card" style="margin-top:12px;">
+      <h3>{{ d.driver_name or '未命名 Shiper' }}</h3>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+        <span class="badge">{{ d.driver_code }}</span>
+
+        {% if d.status == "PENDING_APPROVAL" %}
+          <span class="badge warn">{{ d.status }}</span>
+        {% elif d.status == "SUSPENDED" %}
+          <span class="badge danger">{{ d.status }}</span>
+        {% elif d.status == "REJECTED" %}
+          <span class="badge danger">{{ d.status }}</span>
+        {% else %}
+          <span class="badge">{{ d.status or 'UNKNOWN' }}</span>
+        {% endif %}
+
+        <span class="badge">{{ d.city_block or 'ZHONGLI' }}</span>
+        <span class="badge">{{ d.area_label or '中壢區' }}</span>
+
+        {% if d.is_online %}
+          <span class="badge ok">ONLINE</span>
+        {% else %}
+          <span class="badge warn">OFFLINE</span>
+        {% endif %}
+      </div>
+
+      <p class="muted">
+        電話：{{ d.phone or '-' }}<br>
+        服務區域：{{ d.service_area or '-' }}<br>
+        交通工具：{{ d.vehicle_type or '-' }}<br>
+        建立：{{ d.created_at or '-' }}<br>
+        更新：{{ d.updated_at or '-' }}<br>
+        通過時間：{{ d.approved_at or '-' }}<br>
+        備註：{{ d.status_reason or '-' }}
+      </p>
+
+      <form method="post" action="/admin/drivers/{{ d.driver_code }}/approval">
+        <input
+          name="reason"
+          placeholder="原因 / 備註"
+          value="{{ d.status_reason or '' }}"
+          style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:12px;margin-bottom:10px;"
+        >
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          {% if d.status == "PENDING_APPROVAL" %}
+            <button class="btn" name="action" value="approve">通過審核</button>
+            <button class="btn danger" name="action" value="reject">不通過</button>
+          {% elif d.status == "REJECTED" %}
+            <button class="btn" name="action" value="reactivate">重新啟用</button>
+            <button class="btn danger" name="action" value="suspend">暫停</button>
+          {% elif d.status == "SUSPENDED" %}
+            <button class="btn" name="action" value="reactivate">重新啟用</button>
+          {% else %}
+            <button class="btn" name="action" value="approve">設為通過</button>
+          {% endif %}
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <p class="muted">目前沒有需要審核的 Shiper。</p>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <a class="btn secondary" href="/admin">回 Admin 首頁</a>
+</section>
+{% endblock %}

@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='mobile/app.css') }}">
+
+  <style>
+    .big-ring-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.25), transparent 34%),
+        linear-gradient(135deg, #0f766e, #0b4ea2);
+    }
+
+    .big-ring-overlay[hidden] {
+      display: none !important;
+    }
+
+    .big-ring-overlay.driver-alert {
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.22), transparent 34%),
+        linear-gradient(135deg, #0b4ea2, #0369a1);
+    }
+
+    .big-ring-overlay.store-alert {
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.24), transparent 34%),
+        linear-gradient(135deg, #00a86b, #0b4ea2);
+    }
+
+    .big-ring-card {
+      width: min(560px, 100%);
+      min-height: 78vh;
+      border-radius: 28px;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.38);
+      padding: 26px 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 16px;
+      text-align: center;
+      border: 4px solid rgba(255,255,255,0.9);
+      animation: bigRingCardPulse 1.1s ease-in-out infinite;
+    }
+
+    @keyframes bigRingCardPulse {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.38);
+      }
+      50% {
+        transform: scale(1.015);
+        box-shadow: 0 30px 90px rgba(15, 23, 42, 0.48);
+      }
+    }
+
+    .big-ring-icon {
+      width: 88px;
+      height: 88px;
+      margin: 0 auto;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #ecfdf5;
+      color: #047857;
+      font-size: 44px;
+      font-weight: 900;
+      animation: bigRingIconPulse 0.72s ease-in-out infinite;
+    }
+
+    .driver-alert .big-ring-icon {
+      background: #eff6ff;
+      color: #0b4ea2;
+    }
+
+    @keyframes bigRingIconPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.12); }
+    }
+
+    .big-ring-title {
+      margin: 0;
+      font-size: clamp(42px, 10vw, 72px);
+      line-height: 1.02;
+      font-weight: 950;
+      color: #0f172a;
+      letter-spacing: -0.04em;
+    }
+
+    .big-ring-subtitle {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 800;
+      color: #334155;
+    }
+
+    .big-ring-info {
+      display: grid;
+      gap: 10px;
+      margin: 4px 0 8px;
+      text-align: left;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 18px;
+      padding: 14px;
+      font-size: 18px;
+    }
+
+    .big-ring-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px dashed #e2e8f0;
+      padding-bottom: 8px;
+    }
+
+    .big-ring-line:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .big-ring-line span {
+      color: #64748b;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .big-ring-line b {
+      color: #0f172a;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .big-ring-actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    .big-ring-primary {
+      display: block;
+      width: 100%;
+      border: 0;
+      border-radius: 18px;
+      padding: 18px 16px;
+      background: #0b4ea2;
+      color: #fff;
+      text-decoration: none;
+      font-size: 26px;
+      line-height: 1.2;
+      font-weight: 950;
+      box-shadow: 0 12px 24px rgba(11, 78, 162, 0.24);
+    }
+
+    .store-alert .big-ring-primary {
+      background: #00a86b;
+      box-shadow: 0 12px 24px rgba(0, 168, 107, 0.24);
+    }
+
+    .big-ring-secondary-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .big-ring-secondary,
+    .big-ring-muted {
+      border: 1px solid #cbd5e1;
+      border-radius: 16px;
+      padding: 14px 12px;
+      background: #fff;
+      color: #0f172a;
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .big-ring-muted {
+      color: #64748b;
+    }
+
+    .big-ring-audio-warning {
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: #fffbeb;
+      color: #92400e;
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    .realtime-enable-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .realtime-enable-wrap[hidden] {
+      display: none !important;
+    }
+
+    .realtime-enable-wrap button {
+      min-height: 40px;
+      border-radius: 12px;
+      border: 0;
+      padding: 8px 12px;
+      font-weight: 900;
+      background: #0b4ea2;
+      color: #fff;
+    }
+
+    .realtime-control-panel {
+      margin: 10px 0 0;
+      padding: 10px;
+      border-radius: 16px;
+      border: 1px solid #dbeafe;
+      background: #eff6ff;
+    }
+
+    .realtime-control-panel[hidden] {
+      display: none !important;
+    }
+
+    .realtime-control-panel h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+
+    .realtime-control-panel p {
+      margin: 0 0 8px;
+      color: #475569;
+      font-size: 14px;
+    }
+
+    .realtime-control-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .realtime-control-actions button {
+      min-height: 42px;
+      border-radius: 12px;
+      border: 1px solid #bfdbfe;
+      background: #fff;
+      color: #0f172a;
+      font-weight: 900;
+    }
+
+    @media (max-width: 430px) {
+      .big-ring-overlay {
+        padding: 10px;
+      }
+
+      .big-ring-card {
+        min-height: 86vh;
+        border-radius: 22px;
+        padding: 22px 14px;
+      }
+
+      .big-ring-info {
+        font-size: 16px;
+      }
+
+      .big-ring-primary {
+        font-size: 24px;
+      }
+    }
+  </style>
+</head>
+
+<body
+  data-current-role="{{ current_role or 'GUEST' }}"
+  data-request-path="{{ request_path or request.path }}"
+>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="app-brand">
+        <div>
+          <h1>{{ APP_NAME }}</h1>
+          <p>{% block subtitle %}台灣在地買貨・外送・跑腿平台{% endblock %}</p>
+        </div>
+
+        <span class="role-pill">
+          {% if current_role == 'CUSTOMER' %}
+            客戶
+          {% elif current_role == 'STORE' %}
+            店家
+          {% elif current_role == 'DRIVER' %}
+            Shiper
+          {% elif current_role == 'ADMIN_OPERATOR' %}
+            Admin
+          {% else %}
+            訪客
+          {% endif %}
+        </span>
+      </div>
+    </header>
+
+    <div id="realtime-banner" class="realtime-banner" hidden>
+      <div>
+        <b id="realtime-title">有新通知</b>
+        <p id="realtime-message">請查看工作台。</p>
+      </div>
+
+      <div class="realtime-actions">
+        <button id="realtime-stop" type="button">停止鈴聲</button>
+        <a id="realtime-link" href="#">查看</a>
+      </div>
+    </div>
+
+    <div id="realtime-enable-wrap" class="realtime-enable-wrap" hidden>
+      <button id="realtime-enable" type="button">啟用大聲通知</button>
+      <button id="realtime-test" type="button">測試鈴聲</button>
+      <span>手機瀏覽器需要先點一次，才能播放新訂單鈴聲。</span>
+    </div>
+
+    <section id="realtime-control-panel" class="realtime-control-panel" hidden>
+      <h3>大聲通知設定</h3>
+      <p id="realtime-control-status">尚未啟用。為了避免漏接訂單，請先啟用鈴聲。</p>
+      <div class="realtime-control-actions">
+        <button id="realtime-control-enable" type="button">啟用大聲通知</button>
+        <button id="realtime-control-test" type="button">測試鈴聲</button>
+      </div>
+    </section>
+
+    <div id="bigRingbellOverlay" class="big-ring-overlay" hidden>
+      <section id="bigRingbellCard" class="big-ring-card">
+        <div id="bigRingIcon" class="big-ring-icon">鈴</div>
+
+        <h1 id="bigRingTitle" class="big-ring-title">有新訂單</h1>
+        <p id="bigRingSubtitle" class="big-ring-subtitle">請立即查看工作台</p>
+
+        <div class="big-ring-info">
+          <div class="big-ring-line">
+            <span id="bigRingCountLabel">數量</span>
+            <b id="bigRingCount">-</b>
+          </div>
+
+          <div class="big-ring-line">
+            <span>訂單</span>
+            <b id="bigRingOrderCode">-</b>
+          </div>
+
+          <div class="big-ring-line">
+            <span id="bigRingExtraLabel">金額</span>
+            <b id="bigRingExtra">-</b>
+          </div>
+
+          <div class="big-ring-line">
+            <span id="bigRingMetaLabel">付款</span>
+            <b id="bigRingMeta">-</b>
+          </div>
+        </div>
+
+        <p id="bigRingAudioWarning" class="big-ring-audio-warning" hidden>
+          手機瀏覽器可能封鎖自動播放。請先按「啟用大聲通知」。
+        </p>
+
+        <div class="big-ring-actions">
+          <a id="bigRingPrimaryBtn" class="big-ring-primary" href="#">查看新訂單</a>
+
+          <div class="big-ring-secondary-row">
+            <button id="bigRingStopBtn" class="big-ring-secondary" type="button">
+              停止鈴聲
+            </button>
+            <button id="bigRingLaterBtn" class="big-ring-muted" type="button">
+              稍後處理
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category,message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <main class="app-main">
+      {% block content %}{% endblock %}
+    </main>
+
+    <nav class="bottom-nav">
+      <div class="bottom-nav-inner">
+        <a class="{% if request_path == '/' %}active{% endif %}" href="/">首頁</a>
+        <a class="{% if request_path.startswith('/show') %}active{% endif %}" href="/show">看店</a>
+
+        {% if current_role == 'STORE' %}
+          <a class="{% if request_path.startswith('/store') %}active{% endif %}" href="/store">店家</a>
+        {% elif current_role == 'DRIVER' %}
+          <a class="{% if request_path.startswith('/driver') %}active{% endif %}" href="/driver">接單</a>
+        {% elif current_role == 'ADMIN_OPERATOR' %}
+          <a class="{% if request_path.startswith('/admin') %}active{% endif %}" href="/admin">管理</a>
+        {% else %}
+          <a class="{% if request_path.startswith('/orders') %}active{% endif %}" href="/orders">訂單</a>
+        {% endif %}
+
+        {% if is_logged_in %}
+          <a class="{% if request_path.startswith('/line') %}active{% endif %}" href="/line/bind">LINE</a>
+          <a href="/logout">登出</a>
+        {% else %}
+          <a href="/login">登入</a>
+          <a href="/register">註冊</a>
+        {% endif %}
+      </div>
+    </nav>
+  </div>
+
+  <script src="{{ url_for('static', filename='mobile/realtime.js') }}"></script>
+</body>
+</html>

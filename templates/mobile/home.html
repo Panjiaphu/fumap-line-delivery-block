@@ -1,0 +1,221 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}FUMAP GO｜台灣在地買貨外送協作平台{% endblock %}
+{% block subtitle %}買貨・店家接單・Shiper 配送・BlockFGO 留證{% endblock %}
+
+{% block content %}
+<section class="landing-hero">
+  <div class="landing-glow landing-glow-a"></div>
+  <div class="landing-glow landing-glow-b"></div>
+
+  <div class="landing-hero-inner">
+    <span class="mini-badge">FUMAP GO Commercial V1</span>
+
+    <h2>台灣在地買貨外送協作平台</h2>
+
+    <p>
+      客戶看店下單，店家快速接單製作，Shiper 接附近配送單。
+      每筆訂單、接單、取貨、送達與對帳，都由 BlockFGO 留下流程紀錄。
+    </p>
+
+    <div class="landing-cta-grid">
+      <a class="btn landing-main-cta" href="/show">看店下單</a>
+      <a class="btn secondary" href="/register?role=CUSTOMER">客戶註冊</a>
+      <a class="btn secondary" href="/register?role=STORE">店家註冊</a>
+      <a class="btn secondary" href="/register?role=DRIVER">Shiper 註冊</a>
+    </div>
+
+    <div class="landing-hero-stats">
+      <div>
+        <b>5%</b>
+        <span>店家平台費</span>
+      </div>
+      <div>
+        <b>5%</b>
+        <span>Shiper 平台費</span>
+      </div>
+      <div>
+        <b>Block</b>
+        <span>交易流程留證</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="landing-section">
+  <div class="section-title">
+    <h2>誰可以使用？</h2>
+    <span class="badge ok">三方協作</span>
+  </div>
+
+  <div class="role-card-stack">
+    <section class="landing-role-card customer-role">
+      <div class="role-icon">客</div>
+      <div>
+        <h3>客戶｜看店、選商品、下單</h3>
+        <p>
+          查看中壢、桃園區店家與商品，選擇 COD 或轉帳給 Admin。
+          已綁定 LINE CUM 後，可使用拍照完成與轉帳通知。
+        </p>
+        <a href="/show">去看店</a>
+      </div>
+    </section>
+
+    <section class="landing-role-card store-role">
+      <div class="role-icon">店</div>
+      <div>
+        <h3>店家｜接單、做貨、對帳</h3>
+        <p>
+          手機或 iPad 即可管理商品、接新訂單、完成商品並呼叫 Shiper。
+          平台費以商品成交金額 5% 計算，對帳清楚。
+        </p>
+        <a href="/register?role=STORE">店家加入</a>
+      </div>
+    </section>
+
+    <section class="landing-role-card driver-role">
+      <div class="role-icon">配</div>
+      <div>
+        <h3>Shiper｜上線、接單、配送</h3>
+        <p>
+          上線後查看同區域 SmartRoad 訂單，Google Maps 導航取餐與送達。
+          配送收入平台費 5%，COD 與待付款項清楚顯示。
+        </p>
+        <a href="/register?role=DRIVER">Shiper 加入</a>
+      </div>
+    </section>
+  </div>
+</section>
+
+<section class="landing-section">
+  <div class="section-title">
+    <h2>工作流程</h2>
+    <span class="badge">Fast Action</span>
+  </div>
+
+  <div class="flow-timeline">
+    <div class="flow-step">
+      <span>1</span>
+      <b>客戶下單</b>
+      <p>選店、選商品、填地址與樓層。</p>
+    </div>
+
+    <div class="flow-step">
+      <span>2</span>
+      <b>店家接單</b>
+      <p>確認接單，製作完成後呼叫 Shiper。</p>
+    </div>
+
+    <div class="flow-step">
+      <span>3</span>
+      <b>Shiper 配送</b>
+      <p>接單、導航、取餐、送達。</p>
+    </div>
+
+    <div class="flow-step">
+      <span>4</span>
+      <b>BlockFGO 留證</b>
+      <p>下單、接單、取貨、送達、對帳都有紀錄。</p>
+    </div>
+  </div>
+</section>
+
+<section class="landing-section">
+  <div class="section-title">
+    <h2>平台特色</h2>
+    <span class="badge ok">Commercial Ready</span>
+  </div>
+
+  <div class="feature-grid">
+    <section class="feature-card">
+      <h3>LINE 通知</h3>
+      <p>
+        LINE 只用於通知與聯絡，不用於登入、不建立帳號、不授權。
+        CUM / STRO / DRV 分別綁定不同角色通知。
+      </p>
+    </section>
+
+    <section class="feature-card">
+      <h3>SmartRoad 區域</h3>
+      <p>
+        目前先以中壢 / 桃園 block 管理配送區域，後續可接 GPS 與 5km 精準距離。
+      </p>
+    </section>
+
+    <section class="feature-card">
+      <h3>透明對帳</h3>
+      <p>
+        店家 5%、Shiper 5%，後續 Settlement 會清楚列出誰應收、誰應付。
+      </p>
+    </section>
+
+    <section class="feature-card">
+      <h3>BlockFGO 留證</h3>
+      <p>
+        BlockFGO 是交易流程與操作證據紀錄，不是投資或投機工具。
+      </p>
+    </section>
+  </div>
+</section>
+
+<section class="landing-section">
+  <div class="commercial-banner">
+    <span class="mini-badge">給客戶</span>
+    <h2>看得到流程，也看得到價格</h2>
+    <p>
+      客戶看到的是最終總價。平台費由店家與 Shiper 依成交抽成，
+      讓訂單、配送與對帳更透明。
+    </p>
+
+    <div class="grid-2">
+      <a class="btn" href="/show">立即看店下單</a>
+      <a class="btn secondary" href="/line/bind">綁定 LINE</a>
+    </div>
+  </div>
+</section>
+
+<section class="landing-section">
+  <div class="section-title">
+    <h2>註冊指南</h2>
+    <span class="badge">快速開始</span>
+  </div>
+
+  <div class="guide-list">
+    <section class="guide-item">
+      <b>客戶註冊</b>
+      <p>選擇 CUSTOMER，登入後可看店下單。綁定 CUM LINE 後可使用轉帳與拍照完成。</p>
+      <a href="/register?role=CUSTOMER">註冊客戶</a>
+    </section>
+
+    <section class="guide-item">
+      <b>店家註冊</b>
+      <p>選擇 STORE，完成店家設定與商品上架後，即可接收客戶訂單。</p>
+      <a href="/register?role=STORE">註冊店家</a>
+    </section>
+
+    <section class="guide-item">
+      <b>Shiper 註冊</b>
+      <p>選擇 DRIVER，上線後可查看同區域可接訂單，並使用 Google Maps 導航。</p>
+      <a href="/register?role=DRIVER">註冊 Shiper</a>
+    </section>
+  </div>
+</section>
+
+<section class="landing-section">
+  <div class="block-note-card">
+    <h2>BlockFGO 是什麼？</h2>
+    <p>
+      BlockFGO 用來記錄訂單流程與操作證據，例如下單、店家接單、Shiper 接單、
+      取貨、送達、付款狀態與 Admin 處理紀錄。
+      它的定位是交易留證與平台貢獻紀錄，不是投資收益承諾。
+    </p>
+
+    <div class="block-badges">
+      <span>訂單留證</span>
+      <span>配送留證</span>
+      <span>對帳留證</span>
+      <span>TimeBlock</span>
+    </div>
+  </div>
+</section>
+{% endblock %}

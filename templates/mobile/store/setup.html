@@ -1,0 +1,522 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}店家設定｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}設定店家資料、橫幅圖片、地址、GPS、區域與營業時間{% endblock %}
+
+{% block content %}
+
+{% set bh = store_status.business_hours_status if store_status and store_status.business_hours_status else store_status %}
+{% set open_days = bh.open_days if bh and bh.open_days else [0,1,2,3,4,5,6] %}
+
+<section class="hero">
+  <h2>店家設定</h2>
+  <p>
+    完成店家資料、橫幅圖片、地址、GPS、所在區域與營業時間後，
+    客戶與 Shiper 會更容易找到你的店家。
+  </p>
+</section>
+
+<section class="card">
+  <h2>目前接單狀態</h2>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+    <span class="badge">{{ store.store_code }}</span>
+
+    {% if bh and bh.accepting %}
+      <span class="badge ok">目前可接單</span>
+    {% else %}
+      <span class="badge warn">{{ bh.label if bh else '狀態未知' }}</span>
+    {% endif %}
+
+    {% if store.is_open %}
+      <span class="badge ok">營業開關 ON</span>
+    {% else %}
+      <span class="badge warn">營業開關 OFF</span>
+    {% endif %}
+
+    {% if store.is_temporarily_closed %}
+      <span class="badge warn">今日暫停接單</span>
+    {% endif %}
+
+    {% if store.setup_completed %}
+      <span class="badge ok">資料已完成</span>
+    {% else %}
+      <span class="badge warn">資料未完成</span>
+    {% endif %}
+
+    <span class="badge">{{ store.area_label or '中壢區' }}</span>
+    <span class="badge">{{ store.city_block or 'ZHONGLI' }}</span>
+
+    {% if store.store_lat and store.store_lng %}
+      <span class="badge ok">GPS 已設定</span>
+    {% else %}
+      <span class="badge warn">GPS 未設定</span>
+    {% endif %}
+  </div>
+
+  <p class="muted" style="line-height:1.8;">
+    所在區域：
+    <b>{{ store.area_label or '中壢區' }} / {{ store.city_block or 'ZHONGLI' }}</b><br>
+
+    今日營業時間：
+    <b>{{ bh.open_time if bh else (store.open_time or '10:00') }} - {{ bh.close_time if bh else (store.close_time or '21:00') }}</b><br>
+
+    最後接單：
+    <b>{{ bh.cutoff_time if bh else '-' }}</b>
+    （關店前 {{ store.last_order_minutes_before_close or 30 }} 分鐘）<br>
+
+    每週營業日：
+    <b>
+      {% if bh and bh.open_days_labels %}
+        {{ bh.open_days_labels|join('、') }}
+      {% else %}
+        週一、週二、週三、週四、週五、週六、週日
+      {% endif %}
+    </b><br>
+
+    目前原因：
+    <b>{{ bh.reason if bh else '尚未計算' }}</b>
+  </p>
+
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+    <h3>規則說明</h3>
+    <p class="muted">
+      系統會依營業時間自動停止接收新訂單，但不會影響已建立或處理中的訂單。
+      不需要 cron job，也不會自動改掉店家的營業開關。
+    </p>
+  </section>
+
+  {% if store.banner_url %}
+    <img class="store-setup-preview" src="{{ store.banner_url }}" alt="{{ store.store_name or '店家橫幅圖片' }}">
+    <p class="muted">目前橫幅圖片：{{ store.banner_url }}</p>
+  {% else %}
+    <p class="muted">尚未設定橫幅圖片。建議上傳橫式圖片，系統會自動壓縮成 WEBP。</p>
+  {% endif %}
+
+  <div class="gps-status-box">
+    <b>目前店家座標</b>
+    {% if store.store_lat and store.store_lng %}
+      <span>{{ "%.6f"|format(store.store_lat|float) }}, {{ "%.6f"|format(store.store_lng|float) }}</span>
+    {% else %}
+      <span>尚未設定。請在下方按「取得店家位置」。</span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card">
+  <form method="post" enctype="multipart/form-data" id="storeSetupForm">
+    <div class="form-group">
+      <label>店家名稱</label>
+      <input
+        name="store_name"
+        required
+        value="{{ store.store_name or '' }}"
+        placeholder="例如：港式燒臘"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>分類</label>
+      <select name="category">
+        <option value="FOOD" {% if store.category == 'FOOD' %}selected{% endif %}>餐飲</option>
+        <option value="DRINK" {% if store.category == 'DRINK' %}selected{% endif %}>飲料</option>
+        <option value="SHOP" {% if store.category == 'SHOP' %}selected{% endif %}>商店</option>
+        <option value="SERVICE" {% if store.category == 'SERVICE' %}selected{% endif %}>服務</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>電話</label>
+      <input
+        name="phone"
+        value="{{ store.phone or '' }}"
+        placeholder="例如：0912-345-678"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>店家地址</label>
+      <input
+        name="address"
+        required
+        value="{{ store.address or '' }}"
+        placeholder="桃園市中壢區... / 桃園市桃園區..."
+      >
+      <p class="muted">
+        GPS 只用於計算距離與導航輔助，地址文字仍然必須填寫，方便 Shiper 確認。
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label>店家所在區域</label>
+      <select name="city_block" required>
+        <option value="ZHONGLI" {% if (store.city_block or 'ZHONGLI') == 'ZHONGLI' %}selected{% endif %}>
+          中壢區 / ZHONGLI
+        </option>
+        <option value="TAOYUAN" {% if store.city_block == 'TAOYUAN' %}selected{% endif %}>
+          桃園區 / TAOYUAN
+        </option>
+      </select>
+      <p class="muted">
+        此區域會決定哪些 Shiper 能看到店家的訂單。
+      </p>
+    </div>
+
+    <section class="gps-panel">
+      <div>
+        <h3>店家 GPS 位置</h3>
+        <p>
+          請在店內或店門口按下定位。瀏覽器會詢問位置權限。
+          若定位失敗，可先只填地址，之後再補 GPS。
+        </p>
+      </div>
+
+      <input
+        type="hidden"
+        id="storeLatInput"
+        name="store_lat"
+        value="{{ store.store_lat or 0 }}"
+      >
+      <input
+        type="hidden"
+        id="storeLngInput"
+        name="store_lng"
+        value="{{ store.store_lng or 0 }}"
+      >
+
+      <button type="button" class="btn secondary" id="getStoreGpsBtn">
+        取得店家位置
+      </button>
+
+      <div class="gps-readout" id="storeGpsReadout">
+        {% if store.store_lat and store.store_lng %}
+          目前座標：{{ "%.6f"|format(store.store_lat|float) }}, {{ "%.6f"|format(store.store_lng|float) }}
+        {% else %}
+          尚未取得座標。
+        {% endif %}
+      </div>
+
+      <p class="gps-help" id="storeGpsHelp">
+        若手機沒有跳出位置權限，請確認瀏覽器允許定位。
+      </p>
+    </section>
+
+    <div class="form-group">
+      <label>店家簡介</label>
+      <textarea
+        name="description"
+        placeholder="簡短介紹店家特色、主打商品、營業方式..."
+      >{{ store.description or '' }}</textarea>
+    </div>
+
+    <section class="card" style="border-color:#bae6fd;background:#f0f9ff;">
+      <h2>營業時間與接單規則</h2>
+
+      <div class="form-group">
+        <label>營業開關</label>
+        <select name="is_open">
+          <option value="1" {% if store.is_open %}selected{% endif %}>營業中 / 可依時間接單</option>
+          <option value="0" {% if not store.is_open %}selected{% endif %}>休息中 / 手動停止接單</option>
+        </select>
+        <p class="muted">
+          這是店家手動總開關。若關閉，無論時間是否在營業時間內，都不接受新訂單。
+        </p>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label>開店時間</label>
+          <input
+            type="time"
+            name="open_time"
+            value="{{ store.open_time or '10:00' }}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>關店時間</label>
+          <input
+            type="time"
+            name="close_time"
+            value="{{ store.close_time or '21:00' }}"
+          >
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>最後接單時間</label>
+        <input
+          type="number"
+          min="0"
+          max="180"
+          name="last_order_minutes_before_close"
+          value="{{ store.last_order_minutes_before_close or 30 }}"
+        >
+        <p class="muted">
+          例如：填寫 30 代表關店前 30 分鐘停止接收新訂單。
+        </p>
+      </div>
+
+      <section class="card" style="background:#ffffff;border-color:#dbeafe;">
+        <h3>每週固定營業日</h3>
+        <p class="muted">
+          未勾選任何一天時，系統會預設每天營業，避免店家不小心被全部鎖住。
+        </p>
+
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="0" {% if 0 in open_days %}checked{% endif %}>
+            週一
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="1" {% if 1 in open_days %}checked{% endif %}>
+            週二
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="2" {% if 2 in open_days %}checked{% endif %}>
+            週三
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="3" {% if 3 in open_days %}checked{% endif %}>
+            週四
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="4" {% if 4 in open_days %}checked{% endif %}>
+            週五
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="5" {% if 5 in open_days %}checked{% endif %}>
+            週六
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="open_days" value="6" {% if 6 in open_days %}checked{% endif %}>
+            週日
+          </label>
+        </div>
+      </section>
+
+      <div class="form-group">
+        <label>今日臨時暫停接單</label>
+        <select name="is_temporarily_closed">
+          <option value="0" {% if not store.is_temporarily_closed %}selected{% endif %}>
+            否，正常依營業時間接單
+          </option>
+          <option value="1" {% if store.is_temporarily_closed %}selected{% endif %}>
+            是，今日暫停接單
+          </option>
+        </select>
+        <p class="muted">
+          適合臨時備料、臨時休息、店內太忙。V1 不會自動隔天重置，店家需自行改回正常。
+        </p>
+      </div>
+
+      <div class="form-group">
+        <label>暫停原因</label>
+        <input
+          name="temporary_close_reason"
+          value="{{ store.temporary_close_reason or '' }}"
+          placeholder="例如：今日休息、備料中、臨時有事..."
+        >
+      </div>
+    </section>
+
+    <div class="form-group">
+      <label>上傳橫幅圖片</label>
+      <input
+        type="file"
+        name="banner_file"
+        accept="image/*"
+      >
+      <p class="muted">
+        建議使用橫式圖片。系統會自動壓縮成 WEBP，最大約 1200 x 600。
+        若同時上傳圖片與填寫 URL，系統會優先使用上傳圖片。
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label>橫幅圖片 URL</label>
+      <input
+        name="banner_url"
+        value="{{ store.banner_url or '' }}"
+        placeholder="https://... 或 /uploads/stores/xxx.webp"
+      >
+      <p class="muted">
+        可以貼外部圖片 URL。若上方有上傳圖片，系統會自動使用上傳圖片。
+      </p>
+    </div>
+
+    <button class="btn" type="submit">儲存店家設定</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>上架檢查</h2>
+
+  <div class="checklist">
+    <p>
+      {% if store.store_name %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">未完成</span>
+      {% endif %}
+      店家名稱
+    </p>
+
+    <p>
+      {% if store.phone %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">未完成</span>
+      {% endif %}
+      電話
+    </p>
+
+    <p>
+      {% if store.address %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">未完成</span>
+      {% endif %}
+      地址
+    </p>
+
+    <p>
+      {% if store.city_block %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">未完成</span>
+      {% endif %}
+      店家所在區域
+    </p>
+
+    <p>
+      {% if store.open_time and store.close_time %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">建議補上</span>
+      {% endif %}
+      營業時間
+    </p>
+
+    <p>
+      {% if open_days %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">建議補上</span>
+      {% endif %}
+      每週營業日
+    </p>
+
+    <p>
+      {% if store.store_lat and store.store_lng %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">建議補上</span>
+      {% endif %}
+      GPS 位置
+    </p>
+
+    <p>
+      {% if store.banner_url %}
+        <span class="badge ok">完成</span>
+      {% else %}
+        <span class="badge warn">建議補上</span>
+      {% endif %}
+      橫幅圖片
+    </p>
+
+    <p>
+      {% if bh and bh.accepting %}
+        <span class="badge ok">可接單</span>
+      {% else %}
+        <span class="badge warn">{{ bh.label if bh else '狀態未知' }}</span>
+      {% endif %}
+      接單狀態
+    </p>
+  </div>
+</section>
+
+<section class="grid-2">
+  <a class="btn secondary" href="/store">回店家工作台</a>
+  <a class="btn" href="/store/products">管理商品</a>
+</section>
+
+<script>
+(function(){
+  const btn = document.getElementById("getStoreGpsBtn");
+  const latInput = document.getElementById("storeLatInput");
+  const lngInput = document.getElementById("storeLngInput");
+  const readout = document.getElementById("storeGpsReadout");
+  const help = document.getElementById("storeGpsHelp");
+
+  if (!btn || !latInput || !lngInput || !readout) {
+    return;
+  }
+
+  function setMessage(message, isError){
+    readout.textContent = message;
+    readout.classList.toggle("gps-error", !!isError);
+  }
+
+  btn.addEventListener("click", function(){
+    if (!navigator.geolocation) {
+      setMessage("此瀏覽器不支援定位，請改用手機 Chrome 或 Safari。", true);
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "定位中...";
+    setMessage("正在取得店家位置，請允許瀏覽器定位。", false);
+
+    navigator.geolocation.getCurrentPosition(
+      function(position){
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        latInput.value = lat.toFixed(7);
+        lngInput.value = lng.toFixed(7);
+
+        setMessage(
+          "目前座標：" + lat.toFixed(6) + ", " + lng.toFixed(6) +
+          "｜誤差約 " + Math.round(accuracy) + " 公尺",
+          false
+        );
+
+        if (help) {
+          help.textContent = "定位已取得。請再按「儲存店家設定」才會寫入系統。";
+        }
+
+        btn.disabled = false;
+        btn.textContent = "重新取得店家位置";
+      },
+      function(error){
+        let message = "定位失敗。";
+
+        if (error.code === 1) {
+          message = "定位被拒絕。請允許瀏覽器定位權限。";
+        } else if (error.code === 2) {
+          message = "目前無法取得位置，請確認 GPS 或網路狀態。";
+        } else if (error.code === 3) {
+          message = "定位逾時，請再試一次。";
+        }
+
+        setMessage(message, true);
+
+        if (help) {
+          help.textContent = "你仍可先儲存地址，之後再回來補 GPS。";
+        }
+
+        btn.disabled = false;
+        btn.textContent = "取得店家位置";
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 30000
+      }
+    );
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}BlockFGO｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}證據時間線{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h2>{{ title or 'BlockFGO 證據時間線' }}</h2>
+  <p>依時間排序查看每個關鍵操作。BlockFGO 用於營運證據，不是登入或授權。</p>
+</section>
+
+{% if order %}
+<section class="card">
+  <h2>訂單資料</h2>
+  <p class="muted">
+    訂單：{{ order.order_code }}<br>
+    店家：{{ order.store_name }} / {{ order.store_code }}<br>
+    Shiper：{{ order.driver_name or '-' }} / {{ order.driver_code or '-' }}<br>
+    狀態：{{ order.status }}<br>
+    金額：{{ order.total_twd|twd }}
+  </p>
+</section>
+{% endif %}
+
+{% for b in blocks %}
+<section class="card">
+  <div style="display:flex;justify-content:space-between;gap:10px;">
+    <div>
+      <h2 style="margin-bottom:4px;">{{ b.event_type }}</h2>
+      <p class="muted" style="margin-top:0;">{{ b.created_at }}</p>
+    </div>
+    <span class="badge">{{ b.actor_role }}</span>
+  </div>
+
+  <p>
+    Block：<b>{{ b.block_code }}</b><br>
+    Actor：{{ b.actor_code or '-' }}<br>
+    訂單：{{ b.order_code or '-' }}<br>
+    狀態：{{ b.previous_status or '-' }} → {{ b.new_status or '-' }}<br>
+    金額：{{ b.amount_twd|twd }}
+  </p>
+
+  <p class="muted">
+    Hash：{{ b.payload_hash }}
+  </p>
+
+  {% if b.payload_json %}
+  <details>
+    <summary>查看 payload</summary>
+    <pre style="white-space:pre-wrap;background:#f8fafc;border-radius:14px;padding:12px;overflow:auto;">{{ b.payload_json }}</pre>
+  </details>
+  {% endif %}
+</section>
+{% else %}
+<section class="empty">
+  <h3>沒有 BlockFGO 紀錄</h3>
+</section>
+{% endfor %}
+
+<section class="card">
+  <div class="grid-2">
+    <a class="btn secondary" href="/admin/blocks">Admin Blocks</a>
+    <a class="btn secondary" href="/admin">回 Admin</a>
+  </div>
+</section>
+{% endblock %}

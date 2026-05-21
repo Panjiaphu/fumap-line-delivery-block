@@ -1,0 +1,2071 @@
+from urllib.parse import quote_plus
+
+from flask import Blueprint, render_template, request, redirect, flash, jsonify
+
+from db import get_db
+from services.permission_service import (
+    login_required,
+    role_required,
+    current_user,
+    get_current_driver,
+)
+from services.code_service import now_iso
+from services.block_service import create_block
+from services.order_service import get_order_items
+from services.image_service import ImageUploadError, save_compressed_upload
+from services.email_service import send_customer_delivery_proof_email
+from services.accounting_service import (
+    calculate_order_settlement,
+    create_delivery_accounting_entries,
+    list_accounting_entries_for_order,
+    list_driver_accounting_entries,
+    driver_accounting_summary,
+)
+
+try:
+    from services.line_notify_service import push_to_role_target
+except Exception:
+    def push_to_role_target(db, **kwargs):
+        return {"ok": False, "skipped": True}
+
+
+driver_bp = Blueprint("driver", __name__, url_prefix="/driver")
+
+# Driver Capacity V1:
+# Shiper may accept multiple active delivery orders, but no more than 5.
+MAX_ACTIVE_ORDERS = 5
+
+DRIVER_WORKING_STATUSES = {
+    "DRIVER_ACCEPTED",
+    "PICKED_UP",
+    "DELIVERY_ISSUE",
+    "RETURNING_TO_STORE",
+}
+
+DRIVER_BOARD_STATUSES = {
+    "DRIVER_ACCEPTED",
+    "PICKED_UP",
+    "DELIVERY_ISSUE",
+    "RETURNING_TO_STORE",
+    "RETURNED_TO_STORE",
+}
+
+
+def _int(value, default=0):
+    try:
+        return int(value or 0)
+    except Exception:
+        return int(default or 0)
+
+
+def _float(value, default=0.0):
+    try:
+        value = str(value or "").strip()
+        if not value:
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _text(value, default=""):
+    try:
+        return str(value or default).strip()
+    except Exception:
+        return default
+
+
+def _money(value):
+    return max(0, _int(value, 0))
+
+
+def _safe_row_get(row, key, default=None):
+    try:
+        if row and key in row.keys():
+            return row[key]
+    except Exception:
+        pass
+
+    return default
+
+
+def _has_valid_coordinates(lat, lng):
+    try:
+        lat = float(lat or 0)
+        lng = float(lng or 0)
+        return lat != 0 and lng != 0 and -90 <= lat <= 90 and -180 <= lng <= 180
+    except Exception:
+        return False
+
+
+def _maps_url(address):
+    address = _text(address)
+
+    if not address:
+        return ""
+
+    return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(address)
+
+
+def _maps_url_for_coordinates(lat, lng):
+    if not _has_valid_coordinates(lat, lng):
+        return ""
+
+    return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(
+        f"{float(lat):.7f},{float(lng):.7f}"
+    )
+
+
+def _order_pickup_map_url(order):
+    gps_url = _maps_url_for_coordinates(
+        _safe_row_get(order, "store_lat", 0),
+        _safe_row_get(order, "store_lng", 0),
+    )
+
+    if gps_url:
+        return gps_url
+
+    return _maps_url(_safe_row_get(order, "store_address", ""))
+
+
+def _order_delivery_map_url(order):
+    gps_url = _maps_url_for_coordinates(
+        _safe_row_get(order, "delivery_lat", 0),
+        _safe_row_get(order, "delivery_lng", 0),
+    )
+
+    if gps_url:
+        return gps_url
+
+    return _maps_url(_safe_row_get(order, "delivery_address", ""))
+
+
+def _driver_city_block(driver):
+    city_block = _text(_safe_row_get(driver, "city_block", "")).upper()
+
+    if city_block:
+        return city_block
+
+    service_area = _text(_safe_row_get(driver, "service_area", "")).upper()
+
+    if "TAOYUAN" in service_area or "桃園" in service_area:
+        return "TAOYUAN"
+
+    return "ZHONGLI"
+
+
+def _driver_area_label(driver):
+    area_label = _text(_safe_row_get(driver, "area_label", ""))
+
+    if area_label:
+        return area_label
+
+    city_block = _driver_city_block(driver)
+
+    if city_block == "TAOYUAN":
+        return "桃園區"
+
+    return "中壢區"
+
+
+def _driver_estimated_income(order):
+    settlement = calculate_order_settlement(order)
+    return settlement["driver_gross_twd"]
+
+
+def _distance_band_rank(distance_band):
+    band = _text(distance_band).upper()
+
+    if band in {"0-2KM", "0_2KM", "0-2"}:
+        return 1
+    if band in {"3-4KM", "3_4KM", "3-4"}:
+        return 2
+    if band in {"5-6KM", "5_6KM", "5-6"}:
+        return 3
+    if band in {"OVER_6KM", "OVER6KM", "6KM+", "OVER_6"}:
+        return 9
+
+    return 5
+
+
+def _order_distance_value(order):
+    distance_km = _float(_safe_row_get(order, "distance_km", 0), 0)
+
+    if distance_km > 0:
+        return distance_km
+
+    return float(_distance_band_rank(_safe_row_get(order, "distance_band", "")))
+
+
+def _smartroad_score_value(order):
+    return _int(_safe_row_get(order, "smartroad_score", 50), 50)
+
+
+def _driver_order_rank(order):
+    score = _smartroad_score_value(order)
+
+    if _safe_row_get(order, "smartroad_same_road", 0):
+        score += 30
+
+    if _safe_row_get(order, "smartroad_same_side", 0):
+        score += 20
+
+    if _safe_row_get(order, "smartroad_uturn_risk", 0):
+        score -= 30
+
+    score -= int(_order_distance_value(order) * 5)
+
+    if _money(_safe_row_get(order, "extra_fee_twd", 0)) <= 0:
+        score += 5
+
+    return score
+
+
+def _driver_order_lane(order):
+    rank = _driver_order_rank(order)
+    same_road = bool(_safe_row_get(order, "smartroad_same_road", 0))
+    same_side = bool(_safe_row_get(order, "smartroad_same_side", 0))
+    uturn = bool(_safe_row_get(order, "smartroad_uturn_risk", 0))
+    distance_rank = _distance_band_rank(_safe_row_get(order, "distance_band", ""))
+
+    if uturn or distance_rank >= 9:
+        return "CAUTIOUS"
+
+    if same_road and same_side and rank >= 70:
+        return "RECOMMENDED"
+
+    if same_road or same_side or rank >= 60:
+        return "ROUTE"
+
+    return "NORMAL"
+
+
+def _driver_order_lane_label(order):
+    lane = _driver_order_lane(order)
+
+    if lane == "RECOMMENDED":
+        return "推薦接單"
+    if lane == "ROUTE":
+        return "順路單"
+    if lane == "CAUTIOUS":
+        return "謹慎接單"
+
+    return "一般單"
+
+
+def _driver_order_lane_badge_class(order):
+    lane = _driver_order_lane(order)
+
+    if lane in {"RECOMMENDED", "ROUTE"}:
+        return "ok"
+
+    if lane == "CAUTIOUS":
+        return "warn"
+
+    return ""
+
+
+def _waiting_order_sort_key(order):
+    lane_priority = {
+        "RECOMMENDED": 1,
+        "ROUTE": 2,
+        "NORMAL": 3,
+        "CAUTIOUS": 4,
+    }.get(_driver_order_lane(order), 9)
+
+    return (
+        lane_priority,
+        -_driver_order_rank(order),
+        _distance_band_rank(_safe_row_get(order, "distance_band", "")),
+        _int(_safe_row_get(order, "id", 0), 0),
+    )
+
+
+def _delivery_order_sort_key(order):
+    return (
+        _order_distance_value(order),
+        _distance_band_rank(_safe_row_get(order, "distance_band", "")),
+        -_smartroad_score_value(order),
+        _int(_safe_row_get(order, "id", 0), 0),
+    )
+
+
+def _active_order_count(db, driver_id):
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE driver_id = ?
+          AND status IN (
+            'DRIVER_ACCEPTED',
+            'PICKED_UP',
+            'DELIVERY_ISSUE',
+            'RETURNING_TO_STORE'
+          )
+        """,
+        (driver_id,),
+    ).fetchone()
+
+    return int(row["c"] or 0) if row else 0
+
+
+def _driver_capacity(db, driver_id):
+    """
+    Driver Capacity V1.
+
+    Active orders are counted realtime from orders table.
+    No new DB column is required.
+    """
+    active_count = _active_order_count(db, driver_id)
+    max_active = MAX_ACTIVE_ORDERS
+    remaining = max(0, max_active - active_count)
+    can_accept = active_count < max_active
+
+    return {
+        "can_accept": can_accept,
+        "active_count": active_count,
+        "max_active": max_active,
+        "remaining": remaining,
+        "message": (
+            f"可繼續接單，剩餘 {remaining} 筆。"
+            if can_accept
+            else f"目前已達 {max_active} 筆配送上限，請先完成或退回部分訂單。"
+        ),
+    }
+
+
+def _require_driver_or_redirect():
+    driver = get_current_driver()
+
+    if not driver:
+        flash("找不到 shiper 資料，請重新登入 shiper 帳號。", "danger")
+        return None
+
+    return driver
+
+
+def _approval_status(row):
+    try:
+        if row and "status" in row.keys():
+            return str(row["status"] or "PENDING_APPROVAL").strip().upper()
+    except Exception:
+        pass
+
+    return "PENDING_APPROVAL"
+
+
+def _driver_is_active(driver):
+    return bool(driver and _approval_status(driver) == "ACTIVE")
+
+
+def _driver_pending_response(driver):
+    return render_template(
+        "mobile/driver/pending.html",
+        driver=driver,
+        status=_approval_status(driver),
+    )
+
+
+def _driver_inactive_realtime_payload(driver):
+    status = _approval_status(driver)
+
+    return {
+        "ok": True,
+        "role": "DRIVER",
+        "is_online": False,
+        "should_ring": False,
+        "message": "",
+        "target_url": "/driver",
+        "available_orders": 0,
+        "active_orders": 0,
+        "max_active_orders": MAX_ACTIVE_ORDERS,
+        "can_accept_more_orders": False,
+        "remaining_capacity_orders": 0,
+        "driver_capacity": {
+            "can_accept": False,
+            "active_count": 0,
+            "max_active": MAX_ACTIVE_ORDERS,
+            "remaining": 0,
+            "message": "Shiper 帳號尚未通過審核，不能接單。",
+        },
+        "latest_order_code": "",
+        "latest_store_name": "",
+        "latest_store_address": "",
+        "latest_delivery_address": "",
+        "latest_distance_km": "",
+        "latest_delivery_fee_twd": 0,
+        "latest_total_twd": 0,
+        "latest_smartroad_lane": "",
+        "latest_payment_method": "",
+        "latest_payment_status": "",
+        "approval_required": True,
+        "driver_status": status,
+        "city_block": _driver_city_block(driver) if driver else "ZHONGLI",
+        "area_label": _driver_area_label(driver) if driver else "中壢區",
+        "server_time": now_iso(),
+    }
+
+
+def _order_store_join_sql(where_sql):
+    return f"""
+        SELECT o.*,
+               s.store_code,
+               s.store_name,
+               s.phone AS store_phone,
+               s.address AS store_address,
+               s.store_lat AS store_lat,
+               s.store_lng AS store_lng,
+               s.city_block AS store_city_block,
+               s.area_label AS store_area_label,
+               d.driver_code,
+               d.driver_name,
+               d.phone AS driver_phone
+        FROM orders o
+        JOIN stores s ON s.id = o.store_id
+        LEFT JOIN drivers d ON d.id = o.driver_id
+        WHERE {where_sql}
+    """
+
+
+def _list_waiting_driver_orders(db, driver):
+    city_block = _driver_city_block(driver)
+
+    rows = db.execute(
+        _order_store_join_sql(
+            """
+            o.status = 'WAITING_DRIVER'
+            AND o.driver_id IS NULL
+            AND COALESCE(o.admin_hold, 0) = 0
+            AND (
+                COALESCE(o.city_block, '') = ''
+                OR UPPER(o.city_block) = ?
+            )
+            """
+        )
+        + """
+        ORDER BY o.id ASC
+        LIMIT 100
+        """,
+        (city_block,),
+    ).fetchall()
+
+    return sorted(rows, key=_waiting_order_sort_key)
+
+
+def _count_all_waiting_orders(db):
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE status = 'WAITING_DRIVER'
+          AND driver_id IS NULL
+          AND COALESCE(admin_hold, 0) = 0
+        """
+    ).fetchone()
+
+    return int(row["c"] or 0) if row else 0
+
+
+def _waiting_orders_by_city_block(db):
+    rows = db.execute(
+        """
+        SELECT
+            UPPER(COALESCE(NULLIF(city_block, ''), 'ZHONGLI')) AS city_block,
+            COUNT(*) AS c
+        FROM orders
+        WHERE status = 'WAITING_DRIVER'
+          AND driver_id IS NULL
+          AND COALESCE(admin_hold, 0) = 0
+        GROUP BY UPPER(COALESCE(NULLIF(city_block, ''), 'ZHONGLI'))
+        """
+    ).fetchall()
+
+    result = {
+        "ZHONGLI": 0,
+        "TAOYUAN": 0,
+    }
+
+    for row in rows:
+        city_block = (row["city_block"] or "ZHONGLI").upper()
+
+        if city_block in result:
+            result[city_block] = int(row["c"] or 0)
+
+    return result
+
+
+def _list_driver_active_orders(db, driver_id):
+    rows = db.execute(
+        _order_store_join_sql(
+            """
+            o.driver_id = ?
+            AND o.status IN (
+                'DRIVER_ACCEPTED',
+                'PICKED_UP',
+                'DELIVERY_ISSUE',
+                'RETURNING_TO_STORE',
+                'RETURNED_TO_STORE'
+            )
+            """
+        )
+        + """
+        ORDER BY
+          CASE o.status
+            WHEN 'DRIVER_ACCEPTED' THEN 1
+            WHEN 'PICKED_UP' THEN 2
+            WHEN 'DELIVERY_ISSUE' THEN 3
+            WHEN 'RETURNING_TO_STORE' THEN 4
+            WHEN 'RETURNED_TO_STORE' THEN 5
+            ELSE 9
+          END,
+          o.id ASC
+        LIMIT 100
+        """,
+        (driver_id,),
+    ).fetchall()
+
+    return sorted(
+        rows,
+        key=lambda o: (
+            {
+                "DRIVER_ACCEPTED": 1,
+                "PICKED_UP": 2,
+                "DELIVERY_ISSUE": 3,
+                "RETURNING_TO_STORE": 4,
+                "RETURNED_TO_STORE": 5,
+            }.get(_safe_row_get(o, "status", ""), 9),
+            _delivery_order_sort_key(o),
+        ),
+    )
+
+
+def _list_driver_done_orders(db, driver_id, limit=80):
+    return db.execute(
+        _order_store_join_sql(
+            """
+            o.driver_id = ?
+            AND o.status IN ('DELIVERED', 'COMPLETED')
+            """
+        )
+        + """
+        ORDER BY o.updated_at DESC, o.id DESC
+        LIMIT ?
+        """,
+        (driver_id, int(limit or 80)),
+    ).fetchall()
+
+
+def _get_order_for_driver_page(db, order_code):
+    return db.execute(
+        _order_store_join_sql("o.order_code = ?")
+        + """
+        LIMIT 1
+        """,
+        ((order_code or "").strip().upper(),),
+    ).fetchone()
+
+
+def _driver_owns_order(order, driver):
+    return bool(
+        order
+        and driver
+        and order["driver_id"]
+        and int(order["driver_id"]) == int(driver["id"])
+    )
+
+
+def _can_view_order(order, driver):
+    if not order or not driver:
+        return False
+
+    if (
+        order["status"] == "WAITING_DRIVER"
+        and not order["driver_id"]
+        and int(order["admin_hold"] or 0) == 0
+    ):
+        return True
+
+    return _driver_owns_order(order, driver)
+
+
+def _driver_fast_summary(db, driver, waiting_orders, active_orders):
+    """
+    Driver dashboard summary.
+
+    Important COD V2 rule:
+    - Use calculate_order_settlement() as the single source of truth.
+    - Shiper does not collect store platform fee for Admin.
+    - COD driver_pay_store = subtotal - store_delivery_support.
+    - COD driver_pay_admin = shiper platform fee only.
+    """
+    summary = driver_accounting_summary(db, driver)
+
+    driver_id = int(driver["id"])
+    today_prefix = now_iso()[:10]
+
+    rows = db.execute(
+        """
+        SELECT *
+        FROM orders
+        WHERE driver_id = ?
+          AND status IN ('DELIVERED', 'COMPLETED')
+          AND substr(COALESCE(updated_at, created_at), 1, 10) = ?
+        ORDER BY id DESC
+        """,
+        (driver_id, today_prefix),
+    ).fetchall()
+
+    today_income = 0
+    cod_collected = 0
+    payable_store = 0
+    payable_admin = 0
+    cash_keep = 0
+    net_hint = 0
+    delivered_count = 0
+
+    for row in rows:
+        delivered_count += 1
+
+        settlement = calculate_order_settlement(row)
+        payment_method = settlement["payment_method"]
+
+        today_income += settlement["driver_gross_twd"]
+        payable_admin += settlement["driver_platform_fee_twd"]
+        net_hint += settlement["driver_net_income_twd"]
+
+        if payment_method == "COD":
+            cod_collected += settlement["driver_collect_from_customer_twd"]
+            payable_store += settlement["driver_pay_store_twd"]
+            cash_keep += settlement["driver_keep_twd"]
+
+    working_count = len(
+        [
+            o for o in active_orders
+            if _safe_row_get(o, "status", "") in DRIVER_WORKING_STATUSES
+        ]
+    )
+
+    summary.update(
+        {
+            "available_orders_count": len(waiting_orders),
+            "all_waiting_orders_count": _count_all_waiting_orders(db),
+            "active_orders_count": working_count,
+            "today_delivered_count": delivered_count,
+            "today_income_twd": today_income,
+            "today_cod_collected_twd": cod_collected,
+            "today_payable_store_twd": payable_store,
+            "today_payable_admin_twd": payable_admin,
+            "today_cash_keep_twd": cash_keep,
+            "today_net_hint_twd": net_hint,
+            "area_label": _driver_area_label(driver),
+            "city_block": _driver_city_block(driver),
+        }
+    )
+
+    return summary
+
+
+def _push_delivery_updates(db, order):
+    store_code = order["store_code"]
+    customer_user_id = order["customer_user_id"]
+
+    push_to_role_target(
+        db,
+        role="STORE",
+        target_code=store_code,
+        event_type="ORDER_DELIVERED",
+        order_code=order["order_code"],
+        message=(
+            "FUMAP GO 配送完成\n"
+            f"訂單：{order['order_code']}\n"
+            "狀態：已送達\n"
+            f"金額：{order['total_twd']} TWD"
+        ),
+        commit=False,
+    )
+
+    if customer_user_id:
+        push_to_role_target(
+            db,
+            role="CUSTOMER",
+            target_code=f"CUS-{customer_user_id}",
+            event_type="ORDER_DELIVERED",
+            order_code=order["order_code"],
+            message=(
+                "FUMAP GO 訂單已送達\n"
+                f"訂單：{order['order_code']}\n"
+                "如有問題請聯絡客服。"
+            ),
+            commit=False,
+        )
+
+
+@driver_bp.get("")
+@driver_bp.get("/")
+@login_required
+@role_required("DRIVER")
+def home():
+    db = get_db()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    if not _driver_is_active(driver):
+        return _driver_pending_response(driver)
+
+    board = request.args.get("board", "accept").strip().lower()
+
+    waiting_orders = _list_waiting_driver_orders(db, driver)
+    active_orders = _list_driver_active_orders(db, driver["id"])
+    done_orders = _list_driver_done_orders(db, driver["id"], limit=20)
+    waiting_by_city_block = _waiting_orders_by_city_block(db)
+
+    accepted_orders = [
+        o for o in active_orders
+        if _safe_row_get(o, "status", "") == "DRIVER_ACCEPTED"
+    ]
+
+    picked_up_orders = [
+        o for o in active_orders
+        if _safe_row_get(o, "status", "") == "PICKED_UP"
+    ]
+
+    issue_orders = [
+        o for o in active_orders
+        if _safe_row_get(o, "status", "") in {
+            "DELIVERY_ISSUE",
+            "RETURNING_TO_STORE",
+            "RETURNED_TO_STORE",
+        }
+    ]
+
+    delivery_orders = sorted(
+        accepted_orders + picked_up_orders + issue_orders,
+        key=lambda o: (
+            {
+                "DRIVER_ACCEPTED": 1,
+                "PICKED_UP": 2,
+                "DELIVERY_ISSUE": 3,
+                "RETURNING_TO_STORE": 4,
+                "RETURNED_TO_STORE": 5,
+            }.get(_safe_row_get(o, "status", ""), 9),
+            _delivery_order_sort_key(o),
+        ),
+    )
+
+    driver_capacity = _driver_capacity(db, driver["id"])
+    active_order_count = driver_capacity["active_count"]
+    completed_orders = done_orders
+    accounting = _driver_fast_summary(db, driver, waiting_orders, active_orders)
+
+    return render_template(
+        "mobile/driver/home.html",
+        driver=driver,
+        waiting_orders=waiting_orders,
+        active_orders=active_orders,
+        accepted_orders=accepted_orders,
+        picked_up_orders=picked_up_orders,
+        issue_orders=issue_orders,
+        delivery_orders=delivery_orders,
+        completed_orders=completed_orders,
+        done_orders=done_orders,
+        accounting=accounting,
+        maps_url=_maps_url,
+        pickup_map_url_for_order=_order_pickup_map_url,
+        delivery_map_url_for_order=_order_delivery_map_url,
+        driver_city_block=_driver_city_block(driver),
+        driver_area_label=_driver_area_label(driver),
+        waiting_by_city_block=waiting_by_city_block,
+        max_active_orders=MAX_ACTIVE_ORDERS,
+        active_order_count=active_order_count,
+        driver_capacity=driver_capacity,
+        board=board,
+        order_lane_label=_driver_order_lane_label,
+        order_lane_badge_class=_driver_order_lane_badge_class,
+        order_rank=_driver_order_rank,
+    )
+
+
+@driver_bp.post("/online")
+@login_required
+@role_required("DRIVER")
+def set_online_status():
+    db = get_db()
+    user = current_user()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    if not _driver_is_active(driver):
+        flash("Shiper 帳號尚未通過審核，不能上線接單。", "warning")
+        return redirect("/driver")
+
+    action = request.form.get("action", "").strip()
+    now = now_iso()
+
+    if action == "online":
+        is_online = 1
+        new_status = "ONLINE"
+        flash("已上線，現在可以接單。", "success")
+    elif action == "offline":
+        is_online = 0
+        new_status = "OFFLINE"
+        flash("已離線，不會接收新訂單。", "warning")
+    else:
+        flash("未知操作。", "warning")
+        return redirect("/driver")
+
+    try:
+        db.execute(
+            """
+            UPDATE drivers
+            SET is_online = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (is_online, now, driver["id"]),
+        )
+
+        create_block(
+            db,
+            event_type="DRIVER_ONLINE_STATUS_UPDATED",
+            actor_role="DRIVER",
+            actor_id=user["id"],
+            actor_code=driver["driver_code"],
+            previous_status="ONLINE" if int(driver["is_online"] or 0) else "OFFLINE",
+            new_status=new_status,
+            payload={
+                "driver_code": driver["driver_code"],
+                "driver_name": driver["driver_name"],
+                "is_online": is_online,
+                "city_block": _driver_city_block(driver),
+                "area_label": _driver_area_label(driver),
+            },
+            commit=False,
+        )
+
+        db.commit()
+
+    except Exception as exc:
+        db.rollback()
+        flash(f"更新狀態失敗：{exc}", "danger")
+
+    return redirect("/driver")
+
+
+@driver_bp.post("/area")
+@login_required
+@role_required("DRIVER")
+def set_driver_area():
+    db = get_db()
+    user = current_user()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    action = request.form.get("action", "").strip()
+
+    if action == "set_area_zhongli":
+        city_block = "ZHONGLI"
+        area_label = "中壢區"
+        service_area = "中壢區"
+    elif action == "set_area_taoyuan":
+        city_block = "TAOYUAN"
+        area_label = "桃園區"
+        service_area = "桃園區"
+    else:
+        flash("未知接單區域。", "warning")
+        return redirect("/driver")
+
+    active_count = _active_order_count(db, driver["id"])
+
+    if active_count > 0:
+        flash("你目前有配送中的訂單，完成後才能切換接單區域。", "warning")
+        return redirect("/driver")
+
+    old_city_block = (driver["city_block"] or "").upper()
+
+    if old_city_block == city_block:
+        flash("目前已在此接單區域。", "warning")
+        return redirect("/driver")
+
+    now = now_iso()
+
+    try:
+        db.execute(
+            """
+            UPDATE drivers
+            SET city_block = ?,
+                area_label = ?,
+                service_area = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                city_block,
+                area_label,
+                service_area,
+                now,
+                driver["id"],
+            ),
+        )
+
+        create_block(
+            db,
+            event_type="DRIVER_AREA_UPDATED",
+            actor_role="DRIVER",
+            actor_id=user["id"],
+            actor_code=driver["driver_code"],
+            previous_status=driver["city_block"] or "",
+            new_status=city_block,
+            payload={
+                "driver_code": driver["driver_code"],
+                "driver_name": driver["driver_name"],
+                "old_city_block": driver["city_block"] or "",
+                "old_area_label": driver["area_label"] or "",
+                "new_city_block": city_block,
+                "new_area_label": area_label,
+                "new_service_area": service_area,
+                "action": action,
+                "rule": "Driver can change area only when no active order.",
+            },
+            commit=False,
+        )
+
+        db.commit()
+
+        if city_block == "ZHONGLI":
+            flash("接單區域已切換為 中壢區。", "success")
+        else:
+            flash("接單區域已切換為 桃園區。", "success")
+
+    except Exception as exc:
+        db.rollback()
+        flash(f"切換接單區域失敗：{exc}", "danger")
+
+    return redirect("/driver")
+
+
+@driver_bp.get("/orders")
+@login_required
+@role_required("DRIVER")
+def orders_alias():
+    return redirect("/driver")
+
+
+@driver_bp.route("/order/<order_code>", methods=["GET", "POST"])
+@login_required
+@role_required("DRIVER")
+def order_detail(order_code):
+    db = get_db()
+    user = current_user()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    if not _driver_is_active(driver):
+        flash("Shiper 帳號尚未通過審核，不能操作訂單。", "warning")
+        return redirect("/driver")
+
+    order = _get_order_for_driver_page(db, order_code)
+
+    if not order:
+        flash("找不到訂單。", "danger")
+        return redirect("/driver")
+
+    if not _can_view_order(order, driver):
+        flash("此訂單不屬於你，或已被其他 shiper 接走。", "danger")
+        return redirect("/driver")
+
+    if int(order["admin_hold"] or 0) == 1:
+        flash("此訂單已被 Admin 暫停，暫時不能操作。", "warning")
+        return redirect("/driver")
+
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+
+        try:
+            if action == "accept":
+                _accept_order(db, user=user, driver=driver, order=order)
+                flash("已接單，請前往店家取餐。", "success")
+                return redirect("/driver")
+
+            if action == "cancel_accept":
+                _cancel_accept_order(
+                    db,
+                    user=user,
+                    driver=driver,
+                    order=order,
+                    reason=request.form.get("reason", "Shiper 取消接單"),
+                )
+                flash("已取消接單，訂單已退回可接狀態。", "warning")
+                return redirect("/driver")
+
+            if action == "pickup":
+                _pickup_order(db, user=user, driver=driver, order=order)
+                flash("已取餐，請前往客戶地址。", "success")
+                return redirect("/driver?board=delivery")
+
+            if action == "delivered":
+                _deliver_order(db, user=user, driver=driver, order=order)
+                flash("已完成配送，系統已建立配送紀錄。", "success")
+                return redirect("/driver?board=delivery")
+
+            if action == "report_issue":
+                _report_delivery_issue(
+                    db,
+                    user=user,
+                    driver=driver,
+                    order=order,
+                    issue_reason=request.form.get("issue_reason", ""),
+                    issue_note=request.form.get("issue_note", ""),
+                    contacted_customer=request.form.get("contacted_customer") == "1",
+                    contacted_store=request.form.get("contacted_store") == "1",
+                )
+                flash("已回報配送異常，請優先退回店家處理商品與款項。", "warning")
+                return redirect("/driver?board=delivery")
+
+            if action == "return_to_store":
+                _mark_returning_to_store(
+                    db,
+                    user=user,
+                    driver=driver,
+                    order=order,
+                    return_reason=request.form.get("return_reason", "配送異常後退回店家"),
+                )
+                flash("已進入退回店家流程，請依導航返回店家。", "warning")
+                return redirect("/driver?board=delivery")
+
+            if action == "returned_to_store":
+                _confirm_returned_to_store(
+                    db,
+                    user=user,
+                    driver=driver,
+                    order=order,
+                    money_returned_by_store=request.form.get(
+                        "money_returned_by_store",
+                        "NOT_APPLICABLE",
+                    ),
+                    amount_returned_twd=request.form.get("amount_returned_twd", 0),
+                    return_note=request.form.get("return_note", ""),
+                    contacted_store=request.form.get("contacted_store") == "1",
+                    contacted_admin=request.form.get("contacted_admin") == "1",
+                )
+                flash("已確認商品退回店家，請等待 Admin 處理後續對帳。", "success")
+                return redirect("/driver?board=delivery")
+
+            flash("未知操作。", "warning")
+            return redirect(f"/driver/order/{order_code}")
+
+        except Exception as exc:
+            db.rollback()
+            flash(str(exc), "danger")
+            return redirect(f"/driver/order/{order_code}")
+
+    items = get_order_items(db, order["id"])
+
+    blocks = db.execute(
+        """
+        SELECT *
+        FROM blocks
+        WHERE order_code = ?
+        ORDER BY id DESC
+        LIMIT 100
+        """,
+        (order["order_code"],),
+    ).fetchall()
+
+    accounting_entries = list_accounting_entries_for_order(db, order["order_code"])
+    settlement = calculate_order_settlement(order)
+
+    return render_template(
+        "mobile/driver/order_detail.html",
+        driver=driver,
+        order=order,
+        items=items,
+        blocks=blocks,
+        accounting_entries=accounting_entries,
+        settlement=settlement,
+        pickup_map_url=_order_pickup_map_url(order),
+        delivery_map_url=_order_delivery_map_url(order),
+        estimated_income_twd=_driver_estimated_income(order),
+        driver_city_block=_driver_city_block(driver),
+        driver_area_label=_driver_area_label(driver),
+    )
+
+
+def _accept_order(db, *, user, driver, order):
+    if not _driver_is_active(driver):
+        raise ValueError("Shiper 帳號尚未通過審核，不能接單。")
+
+    if int(driver["is_online"] or 0) != 1:
+        raise ValueError("請先上線，才能接單。")
+
+    if order["status"] != "WAITING_DRIVER" or order["driver_id"]:
+        raise ValueError("此訂單已被其他 shiper 接走，或尚未開放接單。")
+
+    if int(order["admin_hold"] or 0) == 1:
+        raise ValueError("此訂單已被 Admin 暫停，不能接單。")
+
+    driver_city_block = _driver_city_block(driver)
+    order_city_block = _text(_safe_row_get(order, "city_block", "")).upper()
+
+    if order_city_block and order_city_block != driver_city_block:
+        raise ValueError("此訂單不在你的接單區域，不能接單。")
+
+    capacity = _driver_capacity(db, driver["id"])
+    active_count = capacity["active_count"]
+
+    if not capacity["can_accept"]:
+        raise ValueError(capacity["message"])
+
+    now = now_iso()
+
+    cur = db.execute(
+        """
+        UPDATE orders
+        SET status = 'DRIVER_ACCEPTED',
+            driver_id = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND status = 'WAITING_DRIVER'
+          AND driver_id IS NULL
+          AND COALESCE(admin_hold, 0) = 0
+        """,
+        (
+            driver["id"],
+            now,
+            order["id"],
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("此訂單已被其他 shiper 接走或狀態已更新。")
+
+    active_count_after = active_count + 1
+    remaining_after = max(0, MAX_ACTIVE_ORDERS - active_count_after)
+
+    create_block(
+        db,
+        event_type="DRIVER_ACCEPTED",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="WAITING_DRIVER",
+        new_status="DRIVER_ACCEPTED",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "driver_name": driver["driver_name"],
+            "lock_rule": "status WAITING_DRIVER + driver_id IS NULL + admin_hold 0",
+            "max_active_orders": MAX_ACTIVE_ORDERS,
+            "active_count_before": active_count,
+            "active_count_after": active_count_after,
+            "remaining_after": remaining_after,
+            "capacity_rule": "Driver can hold up to 5 active delivery orders.",
+            "city_block": _safe_row_get(order, "city_block", ""),
+            "area_label": _safe_row_get(order, "area_label", ""),
+            "smartroad_lane": _safe_row_get(order, "smartroad_lane", ""),
+            "smartroad_score": _safe_row_get(order, "smartroad_score", 50),
+            "distance_km": _safe_row_get(order, "distance_km", 0),
+            "distance_band": _safe_row_get(order, "distance_band", ""),
+        },
+        commit=False,
+    )
+
+    db.commit()
+
+    refreshed = _get_order_for_driver_page(db, order["order_code"])
+
+    push_to_role_target(
+        db,
+        role="STORE",
+        target_code=refreshed["store_code"],
+        event_type="DRIVER_ACCEPTED",
+        order_code=refreshed["order_code"],
+        message=(
+            "FUMAP GO Shiper 已接單\n"
+            f"訂單：{refreshed['order_code']}\n"
+            f"Shiper：{driver['driver_name']}\n"
+            f"電話：{driver['phone'] or '-'}"
+        ),
+        commit=True,
+    )
+
+
+def _cancel_accept_order(db, *, user, driver, order, reason=""):
+    if not _driver_is_active(driver):
+        raise ValueError("Shiper 帳號尚未通過審核，不能操作訂單。")
+
+    if not _driver_owns_order(order, driver):
+        raise ValueError("此訂單不屬於你，不能取消接單。")
+
+    if order["status"] != "DRIVER_ACCEPTED":
+        raise ValueError("只有尚未取餐的訂單可以取消接單。已取餐後請使用配送異常流程。")
+
+    if int(order["admin_hold"] or 0) == 1:
+        raise ValueError("此訂單已被 Admin 暫停，不能取消接單。")
+
+    now = now_iso()
+    reason = _text(reason, "Shiper 取消接單") or "Shiper 取消接單"
+
+    cur = db.execute(
+        """
+        UPDATE orders
+        SET status = 'WAITING_DRIVER',
+            driver_id = NULL,
+            updated_at = ?
+        WHERE id = ?
+          AND driver_id = ?
+          AND status = 'DRIVER_ACCEPTED'
+        """,
+        (
+            now,
+            order["id"],
+            driver["id"],
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("取消接單失敗，此訂單狀態可能已更新。")
+
+    create_block(
+        db,
+        event_type="DRIVER_CANCELLED_ACCEPT",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="DRIVER_ACCEPTED",
+        new_status="WAITING_DRIVER",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "driver_name": driver["driver_name"],
+            "order_code": order["order_code"],
+            "reason": reason,
+            "rule": "Only DRIVER_ACCEPTED orders can be released before pickup.",
+        },
+        commit=False,
+    )
+
+    db.commit()
+
+
+def _pickup_order(db, *, user, driver, order):
+    if not _driver_owns_order(order, driver):
+        raise ValueError("此訂單不屬於你。")
+
+    if order["status"] != "DRIVER_ACCEPTED":
+        raise ValueError("此訂單目前不能取餐。")
+
+    now = now_iso()
+    settlement = calculate_order_settlement(order)
+
+    db.execute(
+        """
+        UPDATE orders
+        SET status = 'PICKED_UP',
+            updated_at = ?
+        WHERE id = ?
+          AND driver_id = ?
+          AND status = 'DRIVER_ACCEPTED'
+        """,
+        (now, order["id"], driver["id"]),
+    )
+
+    create_block(
+        db,
+        event_type="PICKUP_BLOCK",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="DRIVER_ACCEPTED",
+        new_status="PICKED_UP",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "store_code": order["store_code"],
+            "store_phone": order["store_phone"],
+            "store_address": order["store_address"],
+            "store_lat": _safe_row_get(order, "store_lat", 0),
+            "store_lng": _safe_row_get(order, "store_lng", 0),
+            "pickup_map_url": _order_pickup_map_url(order),
+
+            # COD V2 cash-flow proof.
+            "cod_v2_rule": "Shiper pays store subtotal minus store delivery support. Store platform fee is settled by store with Admin separately.",
+            "driver_collect_from_customer_twd": settlement["driver_collect_from_customer_twd"],
+            "driver_pay_store_twd": settlement["driver_pay_store_twd"],
+            "driver_pay_admin_twd": settlement["driver_pay_admin_twd"],
+            "driver_gross_twd": settlement["driver_gross_twd"],
+            "driver_net_income_twd": settlement["driver_net_income_twd"],
+            "store_platform_fee_twd": settlement["store_platform_fee_twd"],
+            "admin_total_receivable_twd": settlement["admin_total_receivable_twd"],
+
+            "note": "Shiper 已到店取餐。COD V2：店家平台費由店家自行與 Admin 結算，Shiper 不代收。",
+        },
+        commit=False,
+    )
+
+    db.commit()
+
+    if order["customer_user_id"]:
+        push_to_role_target(
+            db,
+            role="CUSTOMER",
+            target_code=f"CUS-{order['customer_user_id']}",
+            event_type="PICKED_UP",
+            order_code=order["order_code"],
+            message=(
+                "FUMAP GO 配送更新\n"
+                f"訂單：{order['order_code']}\n"
+                "Shiper 已取餐，正在前往你的地址。"
+            ),
+            commit=True,
+        )
+
+
+def _report_delivery_issue(
+    db,
+    *,
+    user,
+    driver,
+    order,
+    issue_reason="",
+    issue_note="",
+    contacted_customer=False,
+    contacted_store=False,
+):
+    if not _driver_owns_order(order, driver):
+        raise ValueError("此訂單不屬於你。")
+
+    if order["status"] != "PICKED_UP":
+        raise ValueError("只有已取餐且尚未完成配送的訂單可以回報配送異常。")
+
+    if int(order["admin_hold"] or 0) == 1:
+        raise ValueError("此訂單已被 Admin 暫停，不能回報配送異常。")
+
+    issue_reason = _text(issue_reason, "其他") or "其他"
+    issue_note = _text(issue_note, "")
+    now = now_iso()
+    settlement = calculate_order_settlement(order)
+
+    cur = db.execute(
+        """
+        UPDATE orders
+        SET status = 'DELIVERY_ISSUE',
+            updated_at = ?
+        WHERE id = ?
+          AND driver_id = ?
+          AND status = 'PICKED_UP'
+        """,
+        (
+            now,
+            order["id"],
+            driver["id"],
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("回報配送異常失敗，此訂單狀態可能已更新。")
+
+    create_block(
+        db,
+        event_type="DELIVERY_ISSUE_REPORTED",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="PICKED_UP",
+        new_status="DELIVERY_ISSUE",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "driver_name": driver["driver_name"],
+            "order_code": order["order_code"],
+            "issue_reason": issue_reason,
+            "issue_note": issue_note,
+            "contacted_customer": bool(contacted_customer),
+            "contacted_store": bool(contacted_store),
+            "customer_phone": order["customer_phone"],
+            "store_code": order["store_code"],
+            "store_name": order["store_name"],
+            "store_phone": order["store_phone"],
+            "payment_method": order["payment_method"],
+            "driver_pay_store_twd": settlement["driver_pay_store_twd"],
+            "driver_collect_from_customer_twd": settlement["driver_collect_from_customer_twd"],
+            "note": "After PICKED_UP, driver cannot cancel freely. Delivery issue flow starts.",
+        },
+        commit=False,
+    )
+
+    db.commit()
+
+
+def _mark_returning_to_store(
+    db,
+    *,
+    user,
+    driver,
+    order,
+    return_reason="配送異常後退回店家",
+):
+    if not _driver_owns_order(order, driver):
+        raise ValueError("此訂單不屬於你。")
+
+    if order["status"] != "DELIVERY_ISSUE":
+        raise ValueError("只有配送異常中的訂單可以進入退回店家流程。")
+
+    if int(order["admin_hold"] or 0) == 1:
+        raise ValueError("此訂單已被 Admin 暫停，不能操作退回店家。")
+
+    return_reason = _text(return_reason, "配送異常後退回店家") or "配送異常後退回店家"
+    now = now_iso()
+    settlement = calculate_order_settlement(order)
+
+    cur = db.execute(
+        """
+        UPDATE orders
+        SET status = 'RETURNING_TO_STORE',
+            updated_at = ?
+        WHERE id = ?
+          AND driver_id = ?
+          AND status = 'DELIVERY_ISSUE'
+        """,
+        (
+            now,
+            order["id"],
+            driver["id"],
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("進入退回店家流程失敗，此訂單狀態可能已更新。")
+
+    create_block(
+        db,
+        event_type="RETURNING_TO_STORE",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="DELIVERY_ISSUE",
+        new_status="RETURNING_TO_STORE",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "driver_name": driver["driver_name"],
+            "order_code": order["order_code"],
+            "return_reason": return_reason,
+            "store_code": order["store_code"],
+            "store_name": order["store_name"],
+            "store_phone": order["store_phone"],
+            "store_address": order["store_address"],
+            "pickup_map_url": _order_pickup_map_url(order),
+            "payment_method": order["payment_method"],
+            "driver_pay_store_twd": settlement["driver_pay_store_twd"],
+            "note": "Driver is returning goods to store after delivery issue.",
+        },
+        commit=False,
+    )
+
+    db.commit()
+
+
+def _confirm_returned_to_store(
+    db,
+    *,
+    user,
+    driver,
+    order,
+    money_returned_by_store="NOT_APPLICABLE",
+    amount_returned_twd=0,
+    return_note="",
+    contacted_store=False,
+    contacted_admin=False,
+):
+    if not _driver_owns_order(order, driver):
+        raise ValueError("此訂單不屬於你。")
+
+    if order["status"] != "RETURNING_TO_STORE":
+        raise ValueError("只有退回店家中的訂單可以確認已退回店家。")
+
+    if int(order["admin_hold"] or 0) == 1:
+        raise ValueError("此訂單已被 Admin 暫停，不能確認退回。")
+
+    money_returned_by_store = _text(
+        money_returned_by_store,
+        "NOT_APPLICABLE",
+    ).upper()
+
+    if money_returned_by_store not in {"YES", "NO", "NOT_APPLICABLE"}:
+        money_returned_by_store = "NOT_APPLICABLE"
+
+    amount_returned_twd = _money(amount_returned_twd)
+    return_note = _text(return_note, "")
+    now = now_iso()
+    settlement = calculate_order_settlement(order)
+
+    cur = db.execute(
+        """
+        UPDATE orders
+        SET status = 'RETURNED_TO_STORE',
+            updated_at = ?
+        WHERE id = ?
+          AND driver_id = ?
+          AND status = 'RETURNING_TO_STORE'
+        """,
+        (
+            now,
+            order["id"],
+            driver["id"],
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("確認退回失敗，此訂單狀態可能已更新。")
+
+    create_block(
+        db,
+        event_type="RETURNED_TO_STORE",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="RETURNING_TO_STORE",
+        new_status="RETURNED_TO_STORE",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "driver_name": driver["driver_name"],
+            "order_code": order["order_code"],
+            "store_code": order["store_code"],
+            "store_name": order["store_name"],
+            "payment_method": order["payment_method"],
+            "money_returned_by_store": money_returned_by_store,
+            "amount_returned_twd": amount_returned_twd,
+            "expected_return_amount_twd": settlement["driver_pay_store_twd"],
+            "return_note": return_note,
+            "contacted_store": bool(contacted_store),
+            "contacted_admin": bool(contacted_admin),
+            "next_step": "ADMIN_REVIEW",
+            "note": "Goods returned to store. Admin should review settlement, COD, refund or dispute.",
+        },
+        commit=False,
+    )
+
+    db.commit()
+
+
+def _deliver_order(db, *, user, driver, order):
+    if not _driver_owns_order(order, driver):
+        raise ValueError("此訂單不屬於你。")
+
+    if order["status"] != "PICKED_UP":
+        raise ValueError("請先按已取餐，才能完成配送。配送異常或退回中的訂單不能直接完成配送。")
+
+    if int(order["admin_hold"] or 0) == 1:
+        raise ValueError("此訂單已被 Admin 暫停，不能完成配送。")
+
+    delivery_method = (order["delivery_method"] or "FACE_TO_FACE").upper()
+    proof_required = delivery_method == "PHOTO_PROOF"
+
+    now = now_iso()
+    proof_url = ""
+    delivery_proof_uploaded_at = ""
+
+    file = request.files.get("delivery_proof")
+
+    if file and getattr(file, "filename", ""):
+        proof_url = save_compressed_upload(
+            file,
+            kind="proof_image",
+            owner_code=f"delivery-{order['order_code']}",
+        )
+        delivery_proof_uploaded_at = now
+
+    cur = db.execute(
+        """
+        UPDATE orders
+        SET status = 'DELIVERED',
+            proof_image_url = CASE
+                WHEN ? != '' THEN ?
+                ELSE COALESCE(proof_image_url, '')
+            END,
+            delivery_proof_image_url = CASE
+                WHEN ? != '' THEN ?
+                ELSE COALESCE(delivery_proof_image_url, '')
+            END,
+            delivery_proof_uploaded_at = CASE
+                WHEN ? != '' THEN ?
+                ELSE COALESCE(delivery_proof_uploaded_at, '')
+            END,
+            payment_status = CASE
+                WHEN payment_method = 'COD' THEN 'COD_COLLECTED'
+                ELSE payment_status
+            END,
+            updated_at = ?
+        WHERE id = ?
+          AND driver_id = ?
+          AND status = 'PICKED_UP'
+        """,
+        (
+            proof_url,
+            proof_url,
+            proof_url,
+            proof_url,
+            delivery_proof_uploaded_at,
+            delivery_proof_uploaded_at,
+            now,
+            order["id"],
+            driver["id"],
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("完成配送失敗，此訂單狀態可能已更新。")
+
+    settlement = calculate_order_settlement(order)
+
+    create_block(
+        db,
+        event_type="DELIVERY_BLOCK",
+        actor_role="DRIVER",
+        actor_id=user["id"],
+        actor_code=driver["driver_code"],
+        order_id=order["id"],
+        order_code=order["order_code"],
+        previous_status="PICKED_UP",
+        new_status="DELIVERED",
+        amount_twd=order["total_twd"],
+        payload={
+            "driver_code": driver["driver_code"],
+            "delivery_method": delivery_method,
+            "proof_required": proof_required,
+            "proof_image_stored": bool(proof_url),
+            "proof_image_url": proof_url,
+            "delivery_proof_uploaded_at": delivery_proof_uploaded_at,
+            "delivered_at": now,
+            "payment_method": order["payment_method"],
+            "payment_status_after": "COD_COLLECTED"
+            if order["payment_method"] == "COD"
+            else order["payment_status"],
+            "customer_phone": order["customer_phone"],
+            "delivery_address": order["delivery_address"],
+            "delivery_lat": _safe_row_get(order, "delivery_lat", 0),
+            "delivery_lng": _safe_row_get(order, "delivery_lng", 0),
+            "delivery_map_url": _order_delivery_map_url(order),
+
+            # COD V2 settlement snapshot.
+            "driver_collect_from_customer_twd": settlement["driver_collect_from_customer_twd"],
+            "driver_pay_store_twd": settlement["driver_pay_store_twd"],
+            "driver_pay_admin_twd": settlement["driver_pay_admin_twd"],
+            "driver_keep_twd": settlement["driver_keep_twd"],
+            "driver_gross_twd": settlement["driver_gross_twd"],
+            "driver_net_income_twd": settlement["driver_net_income_twd"],
+            "store_platform_fee_twd": settlement["store_platform_fee_twd"],
+            "admin_total_receivable_twd": settlement["admin_total_receivable_twd"],
+
+            "note": "Shiper confirmed delivery. COD V2: store platform fee is settled by store with Admin separately.",
+        },
+        commit=False,
+    )
+
+    if proof_url:
+        create_block(
+            db,
+            event_type="DELIVERY_PROOF_UPLOADED",
+            actor_role="DRIVER",
+            actor_id=user["id"],
+            actor_code=driver["driver_code"],
+            order_id=order["id"],
+            order_code=order["order_code"],
+            previous_status="",
+            new_status="DELIVERY_PROOF_STORED",
+            amount_twd=0,
+            payload={
+                "order_code": order["order_code"],
+                "proof_type": "DELIVERY_PROOF_IMAGE",
+                "proof_image_stored": True,
+                "delivery_proof_image_url": proof_url,
+                "delivery_proof_uploaded_at": delivery_proof_uploaded_at,
+                "note": "Delivery proof image saved by driver. Email will not attach this image.",
+            },
+            commit=False,
+        )
+
+    refreshed = _get_order_for_driver_page(db, order["order_code"])
+
+    create_delivery_accounting_entries(
+        db,
+        order=refreshed,
+        driver=driver,
+        commit=False,
+    )
+
+    _push_delivery_updates(db, refreshed)
+
+    db.commit()
+
+    email_sent = False
+
+    try:
+        customer = None
+
+        if refreshed["customer_user_id"]:
+            customer = db.execute(
+                """
+                SELECT id, email, email_verified_at
+                FROM users
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (refreshed["customer_user_id"],),
+            ).fetchone()
+
+        customer_email = ""
+        email_verified_at = ""
+
+        if customer:
+            customer_email = _text(_safe_row_get(customer, "email", ""))
+            email_verified_at = _text(_safe_row_get(customer, "email_verified_at", ""))
+
+        if customer_email and email_verified_at:
+            email_sent = send_customer_delivery_proof_email(
+                refreshed,
+                customer_email,
+                order_url=f"/orders?order_code={refreshed['order_code']}",
+            )
+
+            if email_sent:
+                db.execute(
+                    """
+                    UPDATE orders
+                    SET delivery_proof_sent_email_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        now_iso(),
+                        now_iso(),
+                        refreshed["id"],
+                    ),
+                )
+                db.commit()
+
+    except Exception as email_exc:
+        print(f"[DELIVERY_PROOF][EMAIL][ERROR] {email_exc}")
+
+
+@driver_bp.get("/accounting")
+@login_required
+@role_required("DRIVER")
+def accounting():
+    db = get_db()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    entries = list_driver_accounting_entries(db, driver["driver_code"], limit=300)
+    summary = driver_accounting_summary(db, driver)
+    done_orders = _list_driver_done_orders(db, driver["id"], limit=200)
+
+    return render_template(
+        "mobile/driver/accounting.html",
+        driver=driver,
+        entries=entries,
+        summary=summary,
+        done_orders=done_orders,
+    )
+
+
+@driver_bp.post("/payout-account")
+@login_required
+@role_required("DRIVER")
+def payout_account_update():
+    db = get_db()
+    user = current_user()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    try:
+        now = now_iso()
+
+        payout_account_name = request.form.get("payout_account_name", "").strip()
+        payout_bank_name = request.form.get("payout_bank_name", "").strip()
+        payout_bank_code = request.form.get("payout_bank_code", "").strip()
+        payout_bank_account = request.form.get("payout_bank_account", "").strip()
+        payout_note = request.form.get("payout_note", "").strip()
+
+        if payout_bank_account and len(payout_bank_account) < 5:
+            raise ValueError("銀行帳號格式過短，請重新確認。")
+
+        db.execute(
+            """
+            UPDATE drivers
+            SET payout_account_name = ?,
+                payout_bank_name = ?,
+                payout_bank_code = ?,
+                payout_bank_account = ?,
+                payout_note = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                payout_account_name,
+                payout_bank_name,
+                payout_bank_code,
+                payout_bank_account,
+                payout_note,
+                now,
+                driver["id"],
+            ),
+        )
+
+        create_block(
+            db,
+            event_type="DRIVER_PAYOUT_ACCOUNT_UPDATED",
+            actor_role="DRIVER",
+            actor_id=user["id"],
+            actor_code=driver["driver_code"],
+            payload={
+                "driver_code": driver["driver_code"],
+                "driver_name": driver["driver_name"],
+                "payout_account_name_set": bool(payout_account_name),
+                "payout_bank_name_set": bool(payout_bank_name),
+                "payout_bank_code_set": bool(payout_bank_code),
+                "payout_bank_account_set": bool(payout_bank_account),
+                "payout_note_set": bool(payout_note),
+                "updated_at": now,
+            },
+            commit=False,
+        )
+
+        db.commit()
+        flash("Shiper 收款帳戶已更新。", "success")
+
+    except Exception as exc:
+        db.rollback()
+        flash(f"更新收款帳戶失敗：{exc}", "danger")
+
+    return redirect("/driver/accounting")
+
+
+@driver_bp.get("/realtime/status")
+@login_required
+@role_required("DRIVER")
+def realtime_status():
+    db = get_db()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return jsonify({"ok": False, "error": "DRIVER_NOT_FOUND"}), 403
+
+    if not _driver_is_active(driver):
+        return jsonify(_driver_inactive_realtime_payload(driver))
+
+    waiting_orders = _list_waiting_driver_orders(db, driver)
+    active_orders = _list_driver_active_orders(db, driver["id"])
+    capacity = _driver_capacity(db, driver["id"])
+
+    latest = waiting_orders[0] if waiting_orders else None
+    is_online = int(driver["is_online"] or 0) == 1
+
+    latest_order_code = _safe_row_get(latest, "order_code", "") if latest else ""
+    latest_target_url = f"/driver#{latest_order_code}" if latest_order_code else "/driver"
+
+    delivery_fee_twd = 0
+    extra_fee_twd = 0
+    latest_delivery_fee_twd = 0
+
+    if latest:
+        settlement = calculate_order_settlement(latest)
+        delivery_fee_twd = settlement["delivery_fee_twd"]
+        extra_fee_twd = settlement["extra_fee_twd"]
+        latest_delivery_fee_twd = settlement["driver_gross_twd"]
+
+    active_working_orders = [
+        o for o in active_orders
+        if _safe_row_get(o, "status", "") in DRIVER_WORKING_STATUSES
+    ]
+
+    can_ring = bool(is_online and capacity["can_accept"] and len(waiting_orders) > 0)
+
+    if not capacity["can_accept"]:
+        message = capacity["message"]
+    elif can_ring:
+        message = "有新配送單"
+    else:
+        message = ""
+
+    payload = {
+        "ok": True,
+        "role": "DRIVER",
+        "is_online": is_online,
+        "should_ring": can_ring,
+        "message": message,
+        "target_url": latest_target_url,
+
+        "waiting_orders": len(waiting_orders),
+        "available_orders": len(waiting_orders),
+        "active_orders": len(active_working_orders),
+        "max_active_orders": MAX_ACTIVE_ORDERS,
+        "can_accept_more_orders": capacity["can_accept"],
+        "remaining_capacity_orders": capacity["remaining"],
+        "driver_capacity": capacity,
+
+        "latest_order_code": latest_order_code,
+        "latest_store_name": _safe_row_get(latest, "store_name", "") if latest else "",
+        "latest_store_address": _safe_row_get(latest, "store_address", "") if latest else "",
+        "latest_delivery_address": _safe_row_get(latest, "delivery_address", "") if latest else "",
+        "latest_distance_km": _safe_row_get(latest, "distance_km", "") if latest else "",
+        "latest_distance_band": _safe_row_get(latest, "distance_band", "") if latest else "",
+        "latest_total_twd": int(_safe_row_get(latest, "total_twd", 0) or 0) if latest else 0,
+        "latest_delivery_fee_twd": latest_delivery_fee_twd,
+        "latest_base_delivery_fee_twd": delivery_fee_twd,
+        "latest_extra_fee_twd": extra_fee_twd,
+        "latest_smartroad_lane": _safe_row_get(latest, "smartroad_lane", "") if latest else "",
+        "latest_smartroad_score": _safe_row_get(latest, "smartroad_score", "") if latest else "",
+        "latest_payment_method": _safe_row_get(latest, "payment_method", "") if latest else "",
+        "latest_payment_status": _safe_row_get(latest, "payment_status", "") if latest else "",
+
+        "city_block": _driver_city_block(driver),
+        "area_label": _driver_area_label(driver),
+        "server_time": now_iso(),
+    }
+
+    return jsonify(payload)
+
+
+@driver_bp.route("/contract", methods=["GET", "POST"])
+@login_required
+@role_required("DRIVER")
+def contract():
+    import hashlib
+    import json
+
+    db = get_db()
+    user = current_user()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    contract_terms = [
+        "外送員同意使用 FUMAP GO 作為在地買貨與外送協作平台。平台提供可接訂單、SmartRoad 區域提示、Google Maps 導航、配送流程、對帳紀錄與 BlockFGO 留證服務。",
+        "外送員需自行維護姓名、電話、服務區域、交通工具與上線狀態。LINE 綁定僅作為通知與聯絡用途，不作為登入、帳號建立或權限授予。",
+        "外送員可自行切換 ONLINE / OFFLINE。ONLINE 狀態下，外送員可查看同區域 WAITING_DRIVER 訂單，並自行選擇是否接單。",
+        "外送員按下「接單」後，系統會鎖定該訂單，其他外送員不能再接同一筆訂單。接單後，外送員應依平台流程完成取貨、配送與必要 proof。",
+        "FUMAP GO 採低平台費模式，平台僅向外送員收取配送收入 5% 作為平台服務費。外送員配送收入、平台費、淨收入、應收與應付金額，均以系統對帳頁顯示為準。",
+        "配送收入包含基礎配送費與困難配送加價。Commercial V2 中，基礎配送費可能由客戶與店家共同分擔，但不影響外送員依系統顯示取得完整配送收入。",
+        "Commercial V2 基礎配送費如下：0–2 公里：基礎配送費 40 TWD；3–4 公里：基礎配送費 60 TWD；5–6 公里：基礎配送費 80 TWD；超過 6 公里：不自動派單，需由 Admin 手動處理或另行確認。",
+        "困難配送加價為每筆訂單最多加收 20 TWD，並計入外送員配送收入。困難配送包含上樓、重物、地址難找、商場中心、偏遠地點、雨天或其他特殊情況。即使同一筆訂單同時包含多個困難因素，系統仍最多只加收一次 20 TWD。",
+        "COD 訂單中，外送員到店取貨時，需依系統顯示之「到店應付店家金額」先支付給店家。該金額為商品金額扣除店家支援配送費；店家平台費由店家與 Admin 另行結算，外送員不代收。",
+        "COD 訂單配送成功後，外送員向客戶收取 COD 總額。外送員收款後，僅需依對帳頁支付自己的 Shiper 平台費，剩餘為外送員配送收入。店家平台費由店家自行與 Admin 結算。",
+        "若 COD 訂單因客戶拒收、地址錯誤、客戶失聯、不可抗力或其他非外送員可控制因素導致配送失敗，外送員應將商品退回店家，並依系統紀錄向店家取回已支付之到店取貨款。",
+        "若店家拒絕接收退回商品或拒絕退還 COD 到店取貨款，外送員應立即聯絡 Admin，由 Admin 依訂單紀錄、付款紀錄、LINE 聯絡紀錄與 BlockFGO 紀錄進行處理。",
+        "若訂單為客戶已付款、轉帳或其他預付方式，外送員到店取貨時原則上不需向店家支付商品款。若配送失敗，外送員應將商品退回店家，並由 Admin / 店家 / 客戶依付款紀錄協調後續處理。",
+        "外送員應注意取貨地址、送達地址、客戶電話、店家電話、樓層、地址備註、交付方式與困難配送加價。若地址不清楚，應聯絡客戶、店家或 Admin 確認。",
+        "PHOTO_PROOF 訂單必須提供交付證明；FACE_TO_FACE 訂單應當面交付給客戶或指定接收人。若無法完成交付，外送員不得自行判定完成，應依流程回報。",
+        "Google Maps 與 SmartRoad 僅作為導航與區域提示工具，實際路況、地址確認與配送安全仍需由外送員自行判斷。若系統提供 GPS 或座標導航，外送員仍應以實際道路與安全情況為優先。",
+        "外送員不得無故棄單、惡意延遲、虛假完成配送、私下更改收款方式或不當使用客戶與店家資料。",
+        "若發生交通事故、付款異常、客戶失聯、地址錯誤、商品問題或其他突發情況，外送員應即時回報 Admin，不得自行隱瞞或私下處理造成更大爭議。",
+        "BlockFGO 用於記錄接單、取貨、送達、proof、付款、退貨、退款與對帳流程，是交易留證與流程紀錄，不是投資、收益或現金承諾。",
+        "TimeBlock 為平台貢獻紀錄，用於記錄外送員上線、接單、配送完成或配合平台流程之貢獻。TimeBlock 不等於現金，不保證收益，不構成投資承諾。",
+        "外送員只能於配送與客服必要範圍內使用客戶與店家資訊，不得未經授權保存、外洩、販售或不當使用客戶電話、地址、店家資料或訂單內容。",
+        "外送員應遵守交通規則，注意自身與他人安全。交通工具、保險、手機、網路、配送設備與個人安全責任，由外送員自行負責。",
+        "合約簽署後，系統會保存簽署時間、合約內容、合約 hash 與 BlockFGO 紀錄。合約簽署後只可查看，不可刪除或修改；若需更新，需由 Admin 建立新版本並重新簽署。",
+    ]
+
+    if request.method == "POST":
+        if driver["contract_signed_at"]:
+            flash("合約已簽署，只能查看，不能重複簽署。", "warning")
+            return redirect("/driver/contract")
+
+        agree = request.form.get("agree", "").strip()
+
+        if agree != "1":
+            flash("請先勾選同意合約條款。", "danger")
+            return redirect("/driver/contract")
+
+        signed_at = now_iso()
+
+        payload = {
+            "contract_type": "DRIVER_COMMERCIAL_V1",
+            "driver_code": driver["driver_code"],
+            "driver_name": driver["driver_name"],
+            "user_id": user["id"],
+            "signed_at": signed_at,
+            "terms": contract_terms,
+        }
+
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        contract_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+        try:
+            db.execute(
+                """
+                UPDATE drivers
+                SET contract_signed_at = ?,
+                    contract_payload_json = ?,
+                    contract_hash = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    signed_at,
+                    payload_json,
+                    contract_hash,
+                    signed_at,
+                    driver["id"],
+                ),
+            )
+
+            create_block(
+                db,
+                event_type="DRIVER_CONTRACT_SIGNED",
+                actor_role="DRIVER",
+                actor_id=user["id"],
+                actor_code=driver["driver_code"],
+                previous_status="UNSIGNED",
+                new_status="SIGNED",
+                payload={
+                    "contract_type": "DRIVER_COMMERCIAL_V1",
+                    "driver_code": driver["driver_code"],
+                    "contract_hash": contract_hash,
+                    "signed_at": signed_at,
+                },
+                commit=False,
+            )
+
+            db.commit()
+            flash("Shiper 合約已簽署。簽署後只能查看，不能刪除。", "success")
+
+        except Exception as exc:
+            db.rollback()
+            flash(f"合約簽署失敗：{exc}", "danger")
+
+        return redirect("/driver/contract")
+
+    driver = get_current_driver()
+
+    return render_template(
+        "mobile/driver/contract.html",
+        driver=driver,
+        contract_terms=contract_terms,
+    )

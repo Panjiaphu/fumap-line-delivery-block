@@ -1,0 +1,110 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}註冊｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}一個帳號只綁定一個角色{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>註冊帳號</h2>
+  <p class="muted">
+    請選擇角色。此版本一個帳號只使用一個角色：客戶、店家或 Shiper。
+  </p>
+
+  <form method="post" action="/register">
+    <div class="form-group">
+      <label>角色</label>
+      <select name="role">
+        <option value="CUSTOMER" {% if selected_role == 'CUSTOMER' %}selected{% endif %}>
+          客戶
+        </option>
+        <option value="STORE" {% if selected_role == 'STORE' %}selected{% endif %}>
+          店家
+        </option>
+        <option value="DRIVER" {% if selected_role == 'DRIVER' %}selected{% endif %}>
+          Shiper
+        </option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>登入 ID</label>
+      <input
+        name="login_id"
+        required
+        autocomplete="username"
+        placeholder="例如：store01 / driver01"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>Email（選填）</label>
+      <input
+        name="email"
+        type="email"
+        autocomplete="email"
+        placeholder="example@gmail.com"
+      >
+      <p class="muted" style="margin-top:6px;">
+        Email 用於忘記密碼、確認帳號與接收重要通知。
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label>名稱</label>
+      <input
+        name="display_name"
+        required
+        placeholder="客戶姓名 / 店名 / Shiper 姓名"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>電話</label>
+      <input
+        name="phone"
+        required
+        placeholder="手機號碼"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>密碼</label>
+      <input
+        name="password"
+        type="password"
+        required
+        autocomplete="new-password"
+        placeholder="至少 6 位"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>確認密碼</label>
+      <input
+        name="confirm_password"
+        type="password"
+        required
+        autocomplete="new-password"
+        placeholder="請再次輸入密碼"
+      >
+    </div>
+
+    <button class="btn" type="submit">建立帳號</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>註冊後會發生什麼？</h2>
+  <p class="muted">
+    客戶：可以查看店家、選商品並建立訂單。<br>
+    店家：系統會建立店家草稿，之後可到店家頁設定店家資料與商品。<br>
+    Shiper：系統會建立 Shiper 資料，之後可到接單頁上線接單。<br><br>
+    Email 可用於忘記密碼、帳號確認與重要通知。<br>
+    LINE 綁定是另外一步，只用於通知，不是登入或審核。
+  </p>
+</section>
+
+<section class="card">
+  <a class="btn secondary" href="/login">已有帳號，去登入</a>
+</section>
+{% endblock %}

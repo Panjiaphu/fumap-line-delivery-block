@@ -1,0 +1,68 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}登入｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}登入後依角色進入客戶、店家、shiper 或 admin{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>登入</h2>
+  <p class="muted">請輸入登入 ID 與密碼。</p>
+
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next_url or '/' }}">
+
+    <div class="form-group">
+      <label>登入 ID</label>
+      <input
+        name="login_id"
+        required
+        autocomplete="username"
+        placeholder="例如 store01 / driver01"
+      >
+    </div>
+
+    <div class="form-group">
+      <label>密碼</label>
+      <input
+        name="password"
+        type="password"
+        required
+        autocomplete="current-password"
+        placeholder="請輸入密碼"
+      >
+    </div>
+
+    <label class="check-row">
+      <input type="checkbox" name="remember_me" value="1">
+      記住登入狀態
+    </label>
+
+    <p class="muted" style="margin-top:6px;">
+      若使用自己的手機，可勾選記住登入狀態。公共設備請勿勾選。
+    </p>
+
+    <button class="btn" type="submit">登入</button>
+  </form>
+
+  <p class="muted" style="margin-top:14px;text-align:center;">
+    <a href="/forgot-password">忘記密碼？重設密碼</a>
+  </p>
+</section>
+
+<section class="card">
+  <h2>還沒有帳號？</h2>
+  <div class="grid-2">
+    <a class="btn secondary" href="/register?role=CUSTOMER">客戶註冊</a>
+    <a class="btn secondary" href="/register?role=STORE">店家註冊</a>
+    <a class="btn secondary" href="/register?role=DRIVER">Shiper 註冊</a>
+    <a class="btn dark" href="/">回首頁</a>
+  </div>
+</section>
+
+<section class="card">
+  <h2>LINE 說明</h2>
+  <p class="muted">
+    LINE 不用於登入、不建立帳號、不授權。登入 webapp 後，才能在 LINE 頁面綁定通知用 contact code。
+  </p>
+</section>
+{% endblock %}

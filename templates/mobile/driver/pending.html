@@ -1,0 +1,114 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}Shiper 帳號審核｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}接單權限、合約與審核狀態{% endblock %}
+
+{% block content %}
+<section class="hero">
+  {% if status == "PENDING_APPROVAL" %}
+    <h2>Shiper 帳號等待審核</h2>
+    <p>
+      你的 Shiper 帳號正在等待 Admin 檢查。審核通過前，暫時不能上線、
+      不能接單，也不會啟用配送單鈴聲。
+    </p>
+  {% elif status == "REJECTED" %}
+    <h2>Shiper 帳號未通過審核</h2>
+    <p>
+      你的 Shiper 帳號目前未通過審核。請確認資料是否完整，或聯絡 Admin 確認原因。
+    </p>
+  {% elif status == "SUSPENDED" %}
+    <h2>Shiper 帳號已暫停</h2>
+    <p>
+      你的 Shiper 帳號目前已暫停使用，暫時不能上線或接單。
+    </p>
+  {% else %}
+    <h2>Shiper 帳號目前不可使用</h2>
+    <p>
+      你的 Shiper 帳號目前不是可接單狀態，請聯絡 Admin 確認。
+    </p>
+  {% endif %}
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge">{{ driver.driver_code }}</span>
+    <span class="badge warn">{{ status or "UNKNOWN" }}</span>
+    <span class="badge">{{ driver.city_block or "ZHONGLI" }}</span>
+    <span class="badge">{{ driver.area_label or "中壢區" }}</span>
+  </div>
+</section>
+
+{% if driver.status_reason %}
+<section class="card" style="border-color:#fde68a;background:#fffbeb;">
+  <h2>審核備註</h2>
+  <p class="muted">{{ driver.status_reason }}</p>
+</section>
+{% endif %}
+
+{% if status == "PENDING_APPROVAL" %}
+<section class="card">
+  <h2>等待審核期間可以先完成</h2>
+  <p class="muted">
+    Admin 審核前，你可以先完成 LINE 綁定與合作條款。審核通過後，才能上線接單。
+  </p>
+
+  <div class="menu-grid">
+    <a href="/driver/contract">
+      <b>合約 / 文件</b>
+      <span>查看或簽署 Shiper 合作條款</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>LINE 綁定</b>
+      <span>綁定後可接收平台通知</span>
+    </a>
+  </div>
+</section>
+
+<section class="card" style="border-color:#fecaca;background:#fef2f2;">
+  <h2>尚未開放的功能</h2>
+  <p class="muted">
+    審核通過前，Shiper 不能上線，不能接單，不會收到配送單 ringbell。
+  </p>
+</section>
+
+{% elif status == "REJECTED" %}
+<section class="card" style="border-color:#fecaca;background:#fef2f2;">
+  <h2>需要補充或修正資料</h2>
+  <p class="muted">
+    {% if driver.status_reason %}
+      原因：{{ driver.status_reason }}
+    {% else %}
+      請聯絡 Admin 確認原因。
+    {% endif %}
+  </p>
+
+  <a class="btn secondary" href="/line/bind">LINE 綁定 / 聯絡用</a>
+</section>
+
+{% elif status == "SUSPENDED" %}
+<section class="card" style="border-color:#fecaca;background:#fef2f2;">
+  <h2>帳號暫停中</h2>
+  <p class="muted">
+    {% if driver.status_reason %}
+      原因：{{ driver.status_reason }}
+    {% else %}
+      此 Shiper 帳號目前已暫停，請聯絡 Admin 確認。
+    {% endif %}
+  </p>
+
+  <a class="btn secondary" href="/line/bind">LINE 綁定 / 聯絡用</a>
+</section>
+
+{% else %}
+<section class="card" style="border-color:#e5e7eb;background:#f8fafc;">
+  <h2>目前狀態</h2>
+  <p class="muted">
+    狀態：{{ status or "UNKNOWN" }}<br>
+    請聯絡 Admin 確認帳號狀態。
+  </p>
+</section>
+{% endif %}
+
+<section class="card">
+  <a class="btn secondary" href="/logout">登出</a>
+</section>
+{% endblock %}

@@ -1,0 +1,943 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}Shiper 接單｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}接單板、配送板、多單配送{% endblock %}
+
+{% block content %}
+
+{% set cap_active = driver_capacity.active_count if driver_capacity is defined and driver_capacity.active_count is defined else (active_order_count or 0) %}
+{% set cap_max = driver_capacity.max_active if driver_capacity is defined and driver_capacity.max_active is defined else (max_active_orders or 5) %}
+{% set cap_remaining = driver_capacity.remaining if driver_capacity is defined and driver_capacity.remaining is defined else (cap_max - cap_active) %}
+{% if cap_remaining < 0 %}
+  {% set cap_remaining = 0 %}
+{% endif %}
+{% set cap_can_accept = driver_capacity.can_accept if driver_capacity is defined and driver_capacity.can_accept is defined else (cap_active < cap_max) %}
+{% set cap_message = driver_capacity.message if driver_capacity is defined and driver_capacity.message is defined else "" %}
+
+{% macro smartroad_badges(o) %}
+  {% if o.smartroad_lane == 'GREEN' %}
+    <span class="badge ok">SmartRoad 綠色</span>
+  {% elif o.smartroad_lane == 'RED' %}
+    <span class="badge danger">SmartRoad 紅色</span>
+  {% elif o.smartroad_lane == 'YELLOW' %}
+    <span class="badge warn">SmartRoad 黃色</span>
+  {% elif o.smartroad_lane %}
+    <span class="badge">SmartRoad {{ o.smartroad_lane }}</span>
+  {% else %}
+    <span class="badge">SmartRoad</span>
+  {% endif %}
+
+  {% if o.smartroad_score is not none %}
+    <span class="badge">分數 {{ o.smartroad_score }}</span>
+  {% endif %}
+
+  {% if o.smartroad_same_road %}
+    <span class="badge ok">同路</span>
+  {% endif %}
+
+  {% if o.smartroad_same_side %}
+    <span class="badge ok">同側</span>
+  {% endif %}
+
+  {% if o.smartroad_uturn_risk %}
+    <span class="badge warn">可能迴轉</span>
+  {% else %}
+    <span class="badge ok">無迴轉</span>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro tel_link(phone) %}
+  {% if phone %}
+    <a href="tel:{{ phone }}">{{ phone }}</a>
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+
+{% macro driver_gross(o) %}
+  {{ ((o.delivery_fee_twd or 0) + (o.extra_fee_twd or 0))|twd }}
+{% endmacro %}
+
+
+{% macro distance_text(o) %}
+  {% if o.distance_km %}
+    {{ "%.1f"|format(o.distance_km|float) }} km
+  {% elif o.distance_band %}
+    {{ o.distance_band }}
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+
+{% macro section_summary(title, count) %}
+  <summary style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;">
+    <span>
+      <b>{{ title }}</b>
+      <small class="muted">{{ count }} 筆</small>
+    </span>
+    <span class="badge">＋ / －</span>
+  </summary>
+{% endmacro %}
+
+
+{% macro order_badges(o) %}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">
+    <span class="badge">{{ o.distance_band or '-' }}</span>
+    <span class="badge {{ order_lane_badge_class(o) }}">{{ order_lane_label(o) }}</span>
+    <span class="badge">{{ o.payment_method or '-' }}</span>
+    <span class="badge">{{ o.payment_status or '-' }}</span>
+    {{ smartroad_badges(o) }}
+
+    {% if o.extra_fee_twd %}
+      <span class="badge warn">+{{ o.extra_fee_twd }} 困難</span>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+
+{% macro money_values(o) %}
+  {% set subtotal = (o.subtotal_twd or 0)|int %}
+  {% set total = (o.total_twd or 0)|int %}
+  {% set delivery_fee = (o.delivery_fee_twd or 0)|int %}
+  {% set extra_fee = (o.extra_fee_twd or 0)|int %}
+  {% set store_support = (o.store_delivery_support_twd or 0)|int %}
+  {% set gross = delivery_fee + extra_fee %}
+  {% set driver_fee = ((gross * 5 + 99) // 100) %}
+  {% set driver_net = gross - driver_fee %}
+  {% set pay_store = subtotal - store_support %}
+  {% if pay_store < 0 %}
+    {% set pay_store = 0 %}
+  {% endif %}
+
+  {% if o.payment_method == 'COD' %}
+    <section class="card" style="background:#f0fdf4;border-color:#86efac;margin-top:10px;">
+      <h3>Shiper 現金流程</h3>
+
+      <div class="grid-2">
+        <div>
+          <span class="muted">向客戶收款</span>
+          <h3>{{ total|twd }}</h3>
+        </div>
+
+        <div>
+          <span class="muted">到店先付店家</span>
+          <h3>{{ pay_store|twd }}</h3>
+        </div>
+
+        <div>
+          <span class="muted">配送總費用</span>
+          <h3>{{ gross|twd }}</h3>
+        </div>
+
+        <div>
+          <span class="muted">Shiper 平台費 5%</span>
+          <h3>{{ driver_fee|twd }}</h3>
+        </div>
+      </div>
+
+      <p class="muted" style="line-height:1.75;margin-top:10px;">
+        Shiper 現金留存：<b>{{ gross|twd }}</b><br>
+        Shiper 結算後實得：<b style="color:#166534;">{{ driver_net|twd }}</b><br>
+        店家平台費由店家自行與 Admin 結算，Shiper 不代收。
+      </p>
+    </section>
+  {% else %}
+    <section class="card" style="background:#f8fafc;border-color:#cbd5e1;margin-top:10px;">
+      <h3>Shiper 收入</h3>
+
+      <div class="grid-2">
+        <div>
+          <span class="muted">配送總費用</span>
+          <h3>{{ gross|twd }}</h3>
+        </div>
+
+        <div>
+          <span class="muted">Shiper 平台費 5%</span>
+          <h3>{{ driver_fee|twd }}</h3>
+        </div>
+
+        <div>
+          <span class="muted">結算後實得</span>
+          <h3>{{ driver_net|twd }}</h3>
+        </div>
+
+        <div>
+          <span class="muted">付款方式</span>
+          <h3>{{ o.payment_method or '-' }}</h3>
+        </div>
+      </div>
+
+      <p class="muted">
+        非 COD 訂單不向客戶收現金，實際撥款依 Admin / 平台對帳為準。
+      </p>
+    </section>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro route_info_box(o) %}
+  <section class="card" style="background:#f8fafc;border-color:#e2e8f0;margin-top:10px;">
+    <p class="muted" style="margin:0;line-height:1.7;">
+      店家：<b>{{ o.store_name or '-' }}</b><br>
+      取貨：{{ o.store_address or '-' }}<br>
+      送達：{{ o.delivery_address or '-' }} {{ o.floor_number or '' }}<br>
+      距離：<b>{{ distance_text(o) }}</b><br>
+      配送總費用：<b style="color:#166534;">{{ driver_gross(o) }}</b>
+    </p>
+
+    {% if o.extra_fee_reason %}
+      <p class="muted" style="margin:8px 0 0;color:#b45309;font-weight:800;">
+        困難 / 加價原因：{{ o.extra_fee_reason }}
+      </p>
+    {% endif %}
+  </section>
+
+  {{ money_values(o) }}
+{% endmacro %}
+
+
+{% macro contact_box(o) %}
+  <p class="muted" style="line-height:1.65;">
+    店家電話：{{ tel_link(o.store_phone) }}<br>
+    客戶電話：{{ tel_link(o.customer_phone) }}
+  </p>
+{% endmacro %}
+
+{% macro waiting_order_card(o) %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;border-color:#86efac;background:#f0fdf4;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div>
+        <span class="badge {{ order_lane_badge_class(o) }}">{{ order_lane_label(o) }}</span>
+        <h3 style="margin:6px 0 0;">{{ o.order_code }}</h3>
+        <p class="muted" style="margin:4px 0 0;">
+          {{ o.store_name or '-' }}
+        </p>
+      </div>
+
+      <div style="text-align:right;">
+        <span class="badge">Rank {{ order_rank(o) }}</span><br>
+        <b style="display:inline-block;margin-top:8px;font-size:20px;color:#166534;">
+          {{ driver_gross(o) }}
+        </b>
+      </div>
+    </div>
+
+    {{ order_badges(o) }}
+    {{ route_info_box(o) }}
+    {{ contact_box(o) }}
+
+    <form method="post" action="/driver/order/{{ o.order_code }}" style="margin-top:12px;">
+      {% if driver.is_online and cap_can_accept %}
+        <button
+          class="btn driver-accept-main"
+          name="action"
+          value="accept"
+          style="width:100%;min-height:64px;font-size:22px;font-weight:950;border-radius:18px;background:#16a34a;color:#fff;"
+        >
+          接單 / 開始配送
+        </button>
+      {% elif not driver.is_online %}
+        <button
+          class="btn secondary"
+          disabled
+          style="width:100%;min-height:58px;font-size:18px;font-weight:900;"
+        >
+          請先上線才能接單
+        </button>
+      {% else %}
+        <button
+          class="btn secondary"
+          disabled
+          style="width:100%;min-height:58px;font-size:18px;font-weight:900;"
+        >
+          已達 {{ cap_max }} 筆接單上限
+        </button>
+      {% endif %}
+
+      <a
+        class="btn secondary"
+        href="/driver/order/{{ o.order_code }}"
+        style="width:100%;margin-top:10px;"
+      >
+        查看詳情
+      </a>
+    </form>
+  </section>
+{% endmacro %}
+
+
+{% macro accepted_order_card(o) %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;border-color:#bfdbfe;background:#eff6ff;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div>
+        <span class="badge ok">已接</span>
+        <h3 style="margin:6px 0 0;">{{ o.order_code }}</h3>
+        <p class="muted" style="margin:4px 0 0;">{{ o.store_name or '-' }}</p>
+      </div>
+
+      <div style="text-align:right;">
+        <span class="badge warn">{{ o.status }}</span><br>
+        <b style="display:inline-block;margin-top:8px;color:#166534;">
+          {{ driver_gross(o) }}
+        </b>
+      </div>
+    </div>
+
+    {{ order_badges(o) }}
+    {{ route_info_box(o) }}
+    {{ contact_box(o) }}
+
+    <div class="grid-2 driver-map-actions">
+      {% set pickup_url = pickup_map_url_for_order(o) %}
+
+      {% if pickup_url %}
+        <a class="btn" target="_blank" href="{{ pickup_url }}">導航取貨</a>
+      {% else %}
+        <button class="btn secondary" disabled>無取貨導航</button>
+      {% endif %}
+
+      <a class="btn secondary" href="/driver/order/{{ o.order_code }}">查看詳情</a>
+    </div>
+
+    <details style="margin-top:10px;">
+      <summary class="muted" style="font-weight:800;">其他操作 / 危險操作</summary>
+
+      <p class="muted" style="color:#b45309;font-weight:700;margin-top:8px;">
+        只有尚未取餐的訂單可以取消接單。取消後，此單會退回給其他 Shiper 接單。
+      </p>
+
+      <form method="post" action="/driver/order/{{ o.order_code }}">
+        <input type="hidden" name="reason" value="Shiper 在取餐前取消接單">
+        <button class="btn danger" name="action" value="cancel_accept">
+          取消接單
+        </button>
+      </form>
+    </details>
+  </section>
+{% endmacro %}
+
+
+<section class="hero">
+  <h2>Shiper 工作台</h2>
+  <p>
+    上線後可接同區域訂單。Ringbell 會提示新配送單。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge">{{ driver.driver_code }}</span>
+    <span class="badge ok">{{ driver.driver_name }}</span>
+    <span class="badge">{{ driver_area_label }}</span>
+    <span class="badge">{{ driver_city_block }}</span>
+    <span class="badge">上限 {{ cap_max }} 筆</span>
+
+    {% if driver.is_online %}
+      <span class="badge ok">上線中</span>
+    {% else %}
+      <span class="badge warn">離線中</span>
+    {% endif %}
+  </div>
+</section>
+
+
+<section
+  class="card"
+  style="{% if driver.is_online %}border-color:#86efac;background:#f0fdf4;{% else %}border-color:#fed7aa;background:#fff7ed;{% endif %}"
+>
+  <h2>接單狀態</h2>
+
+  {% if driver.is_online %}
+    <p>
+      {% if cap_can_accept %}
+        <span class="badge ok">上線中｜可接單</span>
+      {% else %}
+        <span class="badge warn">上線中｜已達接單上限</span>
+      {% endif %}
+    </p>
+
+    <p class="muted">
+      目前配送中：<b>{{ cap_active }} / {{ cap_max }}</b> 筆。<br>
+      {% if cap_can_accept %}
+        可繼續接單，剩餘 <b>{{ cap_remaining }}</b> 筆。<br>
+      {% else %}
+        目前已達 {{ cap_max }} 筆配送上限，請先完成或退回部分訂單。<br>
+      {% endif %}
+      接單區域：{{ driver_area_label }} / {{ driver_city_block }}
+    </p>
+
+    <form method="post" action="/driver/online">
+      <button class="btn danger" name="action" value="offline">
+        停止接單 / 離線
+      </button>
+    </form>
+  {% else %}
+    <p><span class="badge warn">離線中｜不接收新訂單</span></p>
+    <p class="muted">
+      目前不會接收新單提醒。若要接單，請先上線。<br>
+      目前配送中：<b>{{ cap_active }} / {{ cap_max }}</b> 筆。
+    </p>
+
+    <form method="post" action="/driver/online">
+      <button
+        class="btn"
+        name="action"
+        value="online"
+        style="min-height:58px;font-size:19px;font-weight:950;"
+      >
+        開始接單 / 上線
+      </button>
+    </form>
+  {% endif %}
+</section>
+
+
+<section class="card" style="border-color:#99f6e4;background:#f0fdfa;">
+  <h2>接單容量</h2>
+
+  <div class="grid-2">
+    <div>
+      <span class="muted">目前配送中</span>
+      <h3>{{ cap_active }} / {{ cap_max }}</h3>
+    </div>
+
+    <div>
+      <span class="muted">剩餘可接</span>
+      <h3>{{ cap_remaining }}</h3>
+    </div>
+  </div>
+
+  {% if cap_can_accept %}
+    <p>
+      <span class="badge ok">可繼續接單，剩餘 {{ cap_remaining }} 筆</span>
+    </p>
+  {% else %}
+    <p>
+      <span class="badge warn">目前已達 {{ cap_max }} 筆配送上限</span>
+    </p>
+    <p class="muted">
+      請先完成配送、取消尚未取餐的接單，或完成退回店家流程後再接新單。
+    </p>
+  {% endif %}
+</section>
+
+
+<section class="card" style="border-color:#99f6e4;background:#f0fdfa;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <div>
+      <h2>接單板</h2>
+      <p class="muted">
+        優先看未接訂單。新單 Ringbell 會顯示店家、取貨、送達、距離與配送總費用。
+      </p>
+    </div>
+    <a class="btn secondary" href="/driver?board=delivery">配送板</a>
+  </div>
+</section>
+
+
+<details class="card" {% if cap_can_accept and waiting_orders %}open{% endif %}>
+  {{ section_summary("未接訂單", waiting_orders|length) }}
+
+  {% if not cap_can_accept %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>已達接單上限</h3>
+      <p>
+        目前配送中：{{ cap_active }} / {{ cap_max }} 筆。<br>
+        請完成目前配送後再接新單。
+      </p>
+    </section>
+  {% endif %}
+
+  {% for o in waiting_orders %}
+    {{ waiting_order_card(o) }}
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有未接訂單</h3>
+      <p>
+        店家完成商品並呼叫 Shiper 後，訂單會出現在這裡。
+      </p>
+    </section>
+  {% endfor %}
+</details>
+
+
+<details class="card" {% if accepted_orders %}open{% endif %}>
+  {{ section_summary("已接訂單", accepted_orders|length) }}
+
+  {% for o in accepted_orders %}
+    {{ accepted_order_card(o) }}
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有已接訂單</h3>
+      <p>從未接訂單按下「接單」後，訂單會出現在這裡。</p>
+    </section>
+  {% endfor %}
+
+  {% if accepted_orders %}
+    <a class="btn" href="/driver?board=delivery" style="margin-top:12px;">
+      開始配送｜已接 {{ accepted_orders|length }} 筆
+    </a>
+  {% endif %}
+</details>
+
+<section class="card" style="border-color:#bfdbfe;background:#eff6ff;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <div>
+      <h2>配送板</h2>
+      <p class="muted">
+        已接單後依序取餐、送達。異常操作會收合，避免誤按。
+      </p>
+    </div>
+    <a class="btn secondary" href="/driver?board=accept">返回接單板</a>
+  </div>
+</section>
+
+
+<details class="card" {% if board == 'delivery' or delivery_orders %}open{% endif %}>
+  {{ section_summary("待配送", delivery_orders|length) }}
+
+  {% for o in delivery_orders %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div>
+        <span class="badge ok">第 {{ loop.index }} 單</span>
+        <h3 style="margin:6px 0 0;">{{ o.order_code }}</h3>
+        <p class="muted" style="margin:4px 0 0;">{{ o.store_name or '-' }}</p>
+      </div>
+
+      <div style="text-align:right;">
+        {% if o.status == 'DELIVERY_ISSUE' %}
+          <span class="badge warn">配送異常</span>
+        {% elif o.status == 'RETURNING_TO_STORE' %}
+          <span class="badge warn">退回店家中</span>
+        {% elif o.status == 'RETURNED_TO_STORE' %}
+          <span class="badge">等待 Admin</span>
+        {% else %}
+          <span class="badge warn">{{ o.status }}</span>
+        {% endif %}
+        <br>
+        <b style="display:inline-block;margin-top:8px;color:#166534;">
+          {{ driver_gross(o) }}
+        </b>
+      </div>
+    </div>
+
+    {{ order_badges(o) }}
+    {{ route_info_box(o) }}
+    {{ contact_box(o) }}
+
+    {% set pickup_url = pickup_map_url_for_order(o) %}
+    {% set delivery_url = delivery_map_url_for_order(o) %}
+
+    {% if o.status == 'DRIVER_ACCEPTED' %}
+      <div class="grid-2">
+        {% if pickup_url %}
+          <a class="btn secondary" target="_blank" href="{{ pickup_url }}">導航取貨</a>
+        {% else %}
+          <button class="btn secondary" disabled>無取貨導航</button>
+        {% endif %}
+
+        <form method="post" action="/driver/order/{{ o.order_code }}">
+          <button
+            class="btn"
+            name="action"
+            value="pickup"
+            style="min-height:54px;font-weight:950;"
+          >
+            已取餐
+          </button>
+        </form>
+      </div>
+
+      <details style="margin-top:10px;">
+        <summary class="muted" style="font-weight:800;">其他操作 / 危險操作</summary>
+        <p class="muted" style="color:#b45309;font-weight:700;">
+          只有尚未取餐的訂單可以取消接單。
+        </p>
+        <form method="post" action="/driver/order/{{ o.order_code }}">
+          <input type="hidden" name="reason" value="Shiper 在取餐前取消接單">
+          <button class="btn danger" name="action" value="cancel_accept">
+            取消接單
+          </button>
+        </form>
+      </details>
+
+    {% elif o.status == 'PICKED_UP' %}
+      <div class="grid-2">
+        {% if delivery_url %}
+          <a class="btn secondary" target="_blank" href="{{ delivery_url }}">導航送達</a>
+        {% else %}
+          <button class="btn secondary" disabled>無送達導航</button>
+        {% endif %}
+
+        <form method="post" action="/driver/order/{{ o.order_code }}">
+          <button
+            class="btn"
+            name="action"
+            value="delivered"
+            style="min-height:54px;font-weight:950;background:#16a34a;color:#fff;"
+          >
+            完成配送
+          </button>
+        </form>
+      </div>
+
+      <details style="margin-top:10px;">
+        <summary class="muted" style="font-weight:800;">遇到問題？</summary>
+        <p class="muted" style="color:#b45309;font-weight:700;">
+          已取餐後不能取消接單。如客戶不收貨、失聯、地址錯誤或付款異常，請使用配送異常流程。
+        </p>
+
+        <form method="post" action="/driver/order/{{ o.order_code }}">
+          <div class="form-group">
+            <label>異常原因</label>
+            <select name="issue_reason">
+              <option value="客戶不收貨">客戶不收貨</option>
+              <option value="客戶失聯">客戶失聯</option>
+              <option value="地址錯誤">地址錯誤</option>
+              <option value="無法進入大樓">無法進入大樓</option>
+              <option value="COD 付款異常">COD 付款異常</option>
+              <option value="商品問題">商品問題</option>
+              <option value="交通事故">交通事故</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>備註</label>
+            <input name="issue_note" placeholder="例：客戶電話未接 / 客戶拒收 / 地址錯誤">
+          </div>
+
+          <label class="check-row">
+            <input type="checkbox" name="contacted_customer" value="1">
+            已聯絡客戶
+          </label>
+
+          <label class="check-row">
+            <input type="checkbox" name="contacted_store" value="1">
+            已聯絡店家
+          </label>
+
+          <button class="btn warn" name="action" value="report_issue">
+            回報配送異常
+          </button>
+        </form>
+      </details>
+
+    {% elif o.status == 'DELIVERY_ISSUE' %}
+      <section class="card" style="background:#fff7ed;border-color:#fed7aa;">
+        <h3>配送異常</h3>
+        <p class="muted">
+          此單已進入配送異常。若商品仍在你手上，請優先退回店家，以降低貨品與現金風險。
+        </p>
+      </section>
+
+      <form method="post" action="/driver/order/{{ o.order_code }}">
+        <input type="hidden" name="return_reason" value="配送異常後退回店家">
+        <button class="btn" name="action" value="return_to_store">
+          退回店家
+        </button>
+      </form>
+
+      <a class="btn secondary" href="/line/bind" style="margin-top:10px;">
+        聯絡 Admin
+      </a>
+
+    {% elif o.status == 'RETURNING_TO_STORE' %}
+      <div class="grid-2">
+        {% if pickup_url %}
+          <a class="btn secondary" target="_blank" href="{{ pickup_url }}">導航回店家</a>
+        {% else %}
+          <button class="btn secondary" disabled>無店家導航</button>
+        {% endif %}
+
+        <a class="btn secondary" href="/line/bind">聯絡 Admin</a>
+      </div>
+
+      <details class="card" style="margin-top:10px;" open>
+        <summary style="font-weight:800;">確認已退回店家</summary>
+        <p class="muted">
+          請依導航將商品退回店家。若你已先支付店家款項，請在退回商品時向店家取回款項並保留紀錄。
+        </p>
+
+        <form method="post" action="/driver/order/{{ o.order_code }}">
+          <div class="form-group">
+            <label>店家是否已退還取貨款？</label>
+            <select name="money_returned_by_store">
+              <option value="NOT_APPLICABLE">不適用</option>
+              <option value="YES">YES / 已退還</option>
+              <option value="NO">NO / 未退還</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>退還金額</label>
+            <input name="amount_returned_twd" type="number" min="0" value="0">
+          </div>
+
+          <div class="form-group">
+            <label>退回備註</label>
+            <input name="return_note" placeholder="例：商品已退回，店家已退還取貨款">
+          </div>
+
+          <label class="check-row">
+            <input type="checkbox" name="contacted_store" value="1">
+            已聯絡店家
+          </label>
+
+          <label class="check-row">
+            <input type="checkbox" name="contacted_admin" value="1">
+            需要 Admin 協助
+          </label>
+
+          <button class="btn" name="action" value="returned_to_store">
+            確認已退回店家
+          </button>
+        </form>
+      </details>
+
+    {% elif o.status == 'RETURNED_TO_STORE' %}
+      <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+        <h3>等待 Admin 處理</h3>
+        <p class="muted">
+          商品已退回店家。請等待 Admin 處理後續對帳、退款或爭議紀錄。
+        </p>
+
+        {% if o.payment_method == 'COD' %}
+          <p class="muted" style="color:#b45309;font-weight:800;">
+            請確認店家是否已退還取貨款。若未退還，請聯絡 Admin 並保留證明。
+          </p>
+        {% endif %}
+      </section>
+
+      <a class="btn secondary" href="/line/bind">聯絡 Admin</a>
+    {% endif %}
+
+    <a class="btn secondary" href="/driver/order/{{ o.order_code }}" style="margin-top:10px;">
+      查看詳情
+    </a>
+  </section>
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有待配送訂單</h3>
+      <p>已接訂單會出現在這裡。待配送清空後，本批配送完成。</p>
+    </section>
+  {% endfor %}
+
+  {% if delivery_orders|length == 0 and completed_orders %}
+    <section class="card" style="background:#eff6ff;border-color:#bfdbfe;margin-top:12px;">
+      <h3>本批配送已完成</h3>
+      <p class="muted">目前沒有待配送訂單，可以返回接單板繼續接單。</p>
+      <a class="btn" href="/driver?board=accept">返回接單板</a>
+    </section>
+  {% endif %}
+</details>
+
+<details class="card">
+  <summary style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <span>
+      <b>接單區域</b>
+      <small class="muted">{{ driver_area_label }} / {{ driver_city_block }}</small>
+    </span>
+    <span class="badge">＋ / －</span>
+  </summary>
+
+  <p class="muted" style="margin-top:12px;">
+    目前接單區域：<b>{{ driver_area_label }} / {{ driver_city_block }}</b><br>
+    Shiper 只會看到同區域的 WAITING_DRIVER 訂單。
+  </p>
+
+  <div class="grid-2">
+    <div>
+      <span class="muted">中壢區 / ZHONGLI</span>
+      <h3>{{ waiting_by_city_block.ZHONGLI or 0 }} 筆</h3>
+    </div>
+    <div>
+      <span class="muted">桃園區 / TAOYUAN</span>
+      <h3>{{ waiting_by_city_block.TAOYUAN or 0 }} 筆</h3>
+    </div>
+  </div>
+
+  {% if driver_city_block == 'ZHONGLI' and waiting_by_city_block.TAOYUAN %}
+    <p class="muted" style="color:#0369a1;font-weight:800;">
+      桃園區目前有 {{ waiting_by_city_block.TAOYUAN }} 筆訂單等待 Shiper。
+      可切換到桃園區查看。
+    </p>
+  {% endif %}
+
+  {% if driver_city_block == 'TAOYUAN' and waiting_by_city_block.ZHONGLI %}
+    <p class="muted" style="color:#0369a1;font-weight:800;">
+      中壢區目前有 {{ waiting_by_city_block.ZHONGLI }} 筆訂單等待 Shiper。
+      可切換到中壢區查看。
+    </p>
+  {% endif %}
+
+  <form method="post" action="/driver/area">
+    <div class="grid-2">
+      {% if driver_city_block == 'ZHONGLI' %}
+        <button class="btn secondary" disabled>目前在中壢區</button>
+      {% else %}
+        <button class="btn secondary" name="action" value="set_area_zhongli">
+          切換到中壢區
+        </button>
+      {% endif %}
+
+      {% if driver_city_block == 'TAOYUAN' %}
+        <button class="btn secondary" disabled>目前在桃園區</button>
+      {% else %}
+        <button class="btn secondary" name="action" value="set_area_taoyuan">
+          切換到桃園區
+        </button>
+      {% endif %}
+    </div>
+  </form>
+
+  {% if active_orders %}
+    <p class="muted" style="color:#b45309;font-weight:800;">
+      你目前有配送中的訂單。請先完成配送後再切換接單區域。
+    </p>
+  {% endif %}
+</details>
+
+
+<details class="card" {% if board == 'delivery' and delivery_orders|length == 0 %}open{% endif %}>
+  {{ section_summary("已完成", completed_orders|length) }}
+
+  {% for o in completed_orders %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;background:#f8fafc;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div>
+        <span class="badge ok">完成</span>
+        <h3 style="margin:6px 0 0;">{{ o.order_code }}</h3>
+        <p class="muted" style="margin:4px 0 0;">{{ o.store_name or '-' }}</p>
+      </div>
+      <b style="color:#166534;">{{ driver_gross(o) }}</b>
+    </div>
+
+    <p class="muted" style="line-height:1.65;">
+      送達：{{ o.delivery_address or '-' }} {{ o.floor_number or '' }}<br>
+      完成時間：{{ o.updated_at or o.created_at or '-' }}
+    </p>
+
+    {{ money_values(o) }}
+
+    <a class="btn secondary" href="/driver/order/{{ o.order_code }}">
+      查看詳情
+    </a>
+  </section>
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有完成紀錄</h3>
+    </section>
+  {% endfor %}
+</details>
+
+
+<details class="card">
+  <summary style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <span>
+      <b>今日概況</b>
+      <small class="muted">收入 / 對帳摘要</small>
+    </span>
+    <span class="badge">＋ / －</span>
+  </summary>
+
+  <div class="grid-2" style="margin-top:12px;">
+    <section class="card">
+      <span class="muted">今日配送總費用</span>
+      <h3>{{ accounting.today_income_twd|twd }}</h3>
+      <p class="muted">配送費 + 困難加價</p>
+    </section>
+
+    <section class="card">
+      <span class="muted">今日 Shiper 平台費</span>
+      <h3>{{ accounting.today_payable_admin_twd|twd }}</h3>
+      <p class="muted">Shiper 自己應付 Admin，店家平台費不代收</p>
+    </section>
+
+    <section class="card">
+      <span class="muted">配送中</span>
+      <h3>{{ accounting.active_orders_count }}</h3>
+      <p class="muted">已接單 / 已取餐 / 異常處理中</p>
+    </section>
+
+    <section class="card">
+      <span class="muted">目前區域可接</span>
+      <h3>{{ accounting.available_orders_count }}</h3>
+      <p class="muted">{{ driver_area_label }} / {{ driver_city_block }}</p>
+    </section>
+  </div>
+
+  <p class="muted" style="line-height:1.7;">
+    COD 規則：Shiper 向客戶收全額，到店只付「商品金額 - 店家支援配送」。
+    店家平台費由店家與 Admin 另行結算，Shiper 不代收。
+  </p>
+</details>
+
+
+<details class="card app-details-menu">
+  <summary>
+    <span>Shiper 功能選單</span>
+    <small>點擊展開 / 收合</small>
+  </summary>
+
+  <p class="muted" style="margin-top:10px;">
+    接單與配送保持在首頁主要區域，完整功能集中在此選單。
+  </p>
+
+  <div class="menu-grid">
+    <a href="/driver">
+      <b>接單中心</b>
+      <span>查看接單板與配送板</span>
+    </a>
+
+    <a href="/driver?board=delivery">
+      <b>配送板</b>
+      <span>依序取餐、送達、完成配送</span>
+    </a>
+
+    <a href="/driver/accounting">
+      <b>Shiper 對帳</b>
+      <span>今日收入、COD、應付店家 / Admin</span>
+    </a>
+
+    <a href="/driver/accounting">
+      <b>配送歷史</b>
+      <span>查看已完成配送與收入紀錄</span>
+    </a>
+
+    <a href="/blocks">
+      <b>BlockFGO / TimeBlock</b>
+      <span>接單、取餐、送達留證</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>LINE 綁定</b>
+      <span>DRV 通知用，不是登入</span>
+    </a>
+
+    <a href="/driver/contract">
+      <b>合約 / 文件</b>
+      <span>簽署後只能查看，不能刪除</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>客服</b>
+      <span>透過 LINE 與 Admin 聯絡</span>
+    </a>
+
+    <a href="/logout">
+      <b>登出</b>
+      <span>離開 Shiper 帳號</span>
+    </a>
+  </div>
+</details>
+
+
+<section class="grid-2">
+  <a class="btn secondary" href="/driver/accounting">查看對帳</a>
+  <a class="btn" href="/driver">刷新接單板</a>
+</section>
+
+{% endblock %}

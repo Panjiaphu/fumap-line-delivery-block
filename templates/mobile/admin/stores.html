@@ -1,0 +1,51 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}店家管理｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}查看、啟用、停用店家{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>店家管理</h2>
+  <p class="muted">Admin 只做管理與異常處理，不干預一般訂單流。</p>
+</section>
+
+{% for s in stores %}
+<section class="card">
+  <h2>{{ s.store_name }}</h2>
+  <p class="muted">
+    代碼：{{ s.store_code }}<br>
+    Owner：{{ s.owner_name or '-' }} / {{ s.login_id or '-' }}<br>
+    電話：{{ s.phone or s.owner_phone or '-' }}<br>
+    地址：{{ s.address or '-' }}<br>
+    商品：{{ s.product_count }} 件
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">
+    <span class="badge {% if s.status == 'ACTIVE' %}ok{% else %}danger{% endif %}">{{ s.status }}</span>
+    <span class="badge {% if s.is_open %}ok{% else %}warn{% endif %}">
+      {% if s.is_open %}營業中{% else %}休息中{% endif %}
+    </span>
+    <span class="badge {% if s.setup_completed %}ok{% else %}warn{% endif %}">
+      {% if s.setup_completed %}已設定{% else %}未完成設定{% endif %}
+    </span>
+  </div>
+
+  <form method="post" action="/admin/stores/{{ s.store_code }}/action">
+    <div class="grid-2">
+      <button class="btn secondary" name="action" value="open">設營業</button>
+      <button class="btn secondary" name="action" value="close">設休息</button>
+      <button class="btn" name="action" value="activate">啟用</button>
+      <button class="btn danger" name="action" value="suspend">停用</button>
+    </div>
+  </form>
+</section>
+{% else %}
+<section class="empty">
+  <h3>尚無店家</h3>
+</section>
+{% endfor %}
+
+<section class="card">
+  <a class="btn secondary" href="/admin">回 Admin</a>
+</section>
+{% endblock %}

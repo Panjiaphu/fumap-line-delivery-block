@@ -1,0 +1,685 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}配送訂單｜{{ order.order_code }}{% endblock %}
+{% block subtitle %}快速接單、導航、取餐、送達、配送異常{% endblock %}
+
+{% block content %}
+
+{% macro smartroad_badges(order) %}
+  {% if order.smartroad_lane == 'GREEN' %}
+    <span class="badge ok">SmartRoad 綠色</span>
+  {% elif order.smartroad_lane == 'RED' %}
+    <span class="badge danger">SmartRoad 紅色</span>
+  {% elif order.smartroad_lane == 'YELLOW' %}
+    <span class="badge warn">SmartRoad 黃色</span>
+  {% else %}
+    <span class="badge">SmartRoad 未知</span>
+  {% endif %}
+
+  <span class="badge">分數 {{ order.smartroad_score or 50 }}</span>
+
+  {% if order.smartroad_same_road %}
+    <span class="badge ok">同路線</span>
+  {% endif %}
+
+  {% if order.smartroad_same_side %}
+    <span class="badge ok">同側</span>
+  {% endif %}
+
+  {% if order.smartroad_uturn_risk %}
+    <span class="badge warn">可能需迴轉</span>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro tel_link(phone) %}
+  {% if phone %}
+    <a href="tel:{{ phone }}">{{ phone }}</a>
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+
+{% macro item_bill(items, order) %}
+  {% for i in items %}
+    <div class="bill-line">
+      <span>{{ i.product_name }} x {{ i.qty }}</span>
+      <b>{{ i.line_total_twd|twd }}</b>
+    </div>
+  {% else %}
+    {% if order.manual_order_title %}
+      <div class="bill-line">
+        <span>{{ order.manual_order_title }}</span>
+        <b>{{ order.subtotal_twd|twd }}</b>
+      </div>
+    {% else %}
+      <p class="muted">沒有商品明細。</p>
+    {% endif %}
+  {% endfor %}
+
+  <div class="bill-line bill-sub">
+    <span>商品小計</span>
+    <b>{{ order.subtotal_twd|twd }}</b>
+  </div>
+
+  <div class="bill-line">
+    <span>客戶配送分攤</span>
+    <b>{{ order.customer_delivery_share_twd|twd }}</b>
+  </div>
+
+  <div class="bill-line">
+    <span>困難 / 雨天加價</span>
+    <b>{{ order.extra_fee_twd|twd }}</b>
+  </div>
+
+  <div class="bill-total">
+    <span>客戶總付</span>
+    <b>{{ order.total_twd|twd }}</b>
+  </div>
+{% endmacro %}
+
+
+<section class="card">
+  <h2>{{ order.order_code }}</h2>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">
+    <span class="badge">{{ order.status }}</span>
+    <span class="badge">{{ order.payment_method }}</span>
+    <span class="badge">{{ order.payment_status }}</span>
+    <span class="badge">{{ order.delivery_method }}</span>
+    <span class="badge">{{ order.area_label or driver_area_label }}</span>
+    {{ smartroad_badges(order) }}
+  </div>
+
+  <p class="muted">
+    客戶總付：<b>{{ settlement.total_twd|twd }}</b>｜
+    配送距離：{{ order.distance_km or 0 }} km / {{ order.distance_band or '-' }}<br>
+    Shiper 預估配送收入：<b>{{ estimated_income_twd|twd }}</b>
+  </p>
+
+  {% if order.admin_hold %}
+    <section class="card" style="background:#fff1f2;border-color:#fecdd3;">
+      <h3>Admin 已暫停</h3>
+      <p class="muted">
+        原因：{{ order.admin_hold_reason or '訂單或付款需確認' }}<br>
+        此訂單暫時不能操作。
+      </p>
+    </section>
+  {% endif %}
+</section>
+
+
+<section class="fast-panel">
+  <h2>配送重點</h2>
+
+  <div class="fast-row">
+    <span class="muted">取餐店家</span>
+    <b>{{ order.store_name or '-' }}</b>
+  </div>
+
+  <div class="fast-row">
+    <span class="muted">店家電話</span>
+    <b>{{ tel_link(order.store_phone) }}</b>
+  </div>
+
+  <div class="fast-row">
+    <span class="muted">取餐地址</span>
+    <b>{{ order.store_address or '-' }}</b>
+  </div>
+
+  <hr>
+
+  <div class="fast-row">
+    <span class="muted">送達客戶</span>
+    <b>{{ order.customer_name or '-' }}</b>
+  </div>
+
+  <div class="fast-row">
+    <span class="muted">客戶電話</span>
+    <b>{{ tel_link(order.customer_phone) }}</b>
+  </div>
+
+  <div class="fast-row">
+    <span class="muted">送達地址</span>
+    <b>{{ order.delivery_address or '-' }} {{ order.floor_number or '' }}</b>
+  </div>
+
+  <div class="fast-row">
+    <span class="muted">地址備註</span>
+    <b>{{ order.address_note or '-' }}</b>
+  </div>
+
+  <div class="map-button-row">
+    {% if pickup_map_url %}
+      <a class="btn" target="_blank" href="{{ pickup_map_url }}">導航到店家</a>
+    {% else %}
+      <button class="btn secondary" disabled>無店家導航</button>
+    {% endif %}
+
+    {% if delivery_map_url %}
+      <a class="btn" target="_blank" href="{{ delivery_map_url }}">導航到客戶</a>
+    {% else %}
+      <button class="btn secondary" disabled>無客戶導航</button>
+    {% endif %}
+  </div>
+</section>
+
+
+<section class="action-focus-box">
+  {% if order.status == 'WAITING_DRIVER' and not order.driver_id %}
+    <h2>下一步：接單</h2>
+    <p class="muted">接單後系統會鎖定此單，其他 Shiper 不能再接。</p>
+
+    <form method="post">
+      {% if driver.is_online %}
+        <button class="btn" name="action" value="accept">確認接單</button>
+      {% else %}
+        <button class="btn secondary" disabled>請先回工作台上線</button>
+        <a class="btn" href="/driver">回工作台上線</a>
+      {% endif %}
+    </form>
+
+  {% elif order.status == 'DRIVER_ACCEPTED' %}
+    <h2>下一步：已到店取餐</h2>
+    <p class="muted">
+      到店拿到商品後，按下已取餐。<br>
+      若尚未取餐，可取消接單並退回可接狀態。
+    </p>
+
+    <div class="grid-2">
+      {% if pickup_map_url %}
+        <a class="btn secondary" target="_blank" href="{{ pickup_map_url }}">導航取貨</a>
+      {% else %}
+        <button class="btn secondary" disabled>無店家導航</button>
+      {% endif %}
+
+      <form method="post">
+        <button class="btn" name="action" value="pickup">已到店取餐</button>
+      </form>
+    </div>
+
+    <details class="card" style="margin-top:12px;">
+      <summary style="font-weight:900;">其他操作 / 危險操作</summary>
+
+      <p class="muted" style="color:#b45309;font-weight:700;margin-top:10px;">
+        只有尚未取餐的訂單可以取消接單。取消後，此單會退回給其他 Shiper 接單。
+      </p>
+
+      <form method="post">
+        <div class="form-group">
+          <label>取消原因</label>
+          <select name="reason">
+            <option value="臨時有事">臨時有事</option>
+            <option value="距離太遠">距離太遠</option>
+            <option value="店家等待太久">店家等待太久</option>
+            <option value="地址不清楚">地址不清楚</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+
+        <button class="btn danger" name="action" value="cancel_accept">
+          取消接單 / 退回可接
+        </button>
+      </form>
+    </details>
+
+    <p class="muted" style="color:#b45309;font-weight:700;margin-top:10px;">
+      已取餐後不能取消接單。如客戶不收貨、失聯、地址錯誤或付款異常，請使用配送異常流程。
+    </p>
+
+  {% elif order.status == 'PICKED_UP' %}
+    <h2>下一步：確認送達</h2>
+
+    {% if order.delivery_method == 'PHOTO_PROOF' %}
+      <p class="muted">
+        此單需要拍照完成。可上傳配送證明圖片作為系統留證。<br>
+        請確認已完成交付後，按下「確認已送達」。
+      </p>
+    {% else %}
+      <p class="muted">
+        此單為當面交付。請確認客戶已收到商品後，按下「確認已送達」。<br>
+        如有需要，也可以上傳配送證明圖片作為系統留證。
+      </p>
+    {% endif %}
+
+    <div class="grid-2">
+      {% if delivery_map_url %}
+        <a class="btn secondary" target="_blank" href="{{ delivery_map_url }}">導航送達</a>
+      {% else %}
+        <button class="btn secondary" disabled>無客戶導航</button>
+      {% endif %}
+
+      <form method="post" enctype="multipart/form-data">
+        <div class="form-group">
+          <label>配送證明圖片（選填）</label>
+          <input
+            type="file"
+            name="delivery_proof"
+            accept="image/*"
+          >
+          <p class="muted" style="margin-top:6px;">
+            圖片會保存在系統中，不會作為 Email 附件寄出。
+          </p>
+        </div>
+
+        <button class="btn" name="action" value="delivered">確認已送達</button>
+      </form>
+    </div>
+
+    <details class="card" style="margin-top:12px;">
+      <summary style="font-weight:900;">遇到問題？配送異常</summary>
+
+      <p class="muted" style="color:#b45309;font-weight:700;">
+        已取餐後不能取消接單。如客戶不收貨、失聯、地址錯誤或付款異常，請使用配送異常流程。
+      </p>
+
+      {% if order.payment_method == 'COD' %}
+        <p class="muted" style="color:#b45309;font-weight:800;">
+          COD 單若客戶未付款或拒收，請勿自行完成配送。請走配送異常與退回店家流程。
+        </p>
+      {% endif %}
+
+      <form method="post">
+        <div class="form-group">
+          <label>異常原因</label>
+          <select name="issue_reason">
+            <option value="客戶不收貨">客戶不收貨</option>
+            <option value="客戶失聯">客戶失聯</option>
+            <option value="地址錯誤">地址錯誤</option>
+            <option value="無法進入大樓">無法進入大樓</option>
+            <option value="COD 付款異常">COD 付款異常</option>
+            <option value="商品問題">商品問題</option>
+            <option value="交通事故">交通事故</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>異常備註</label>
+          <textarea name="issue_note" rows="3" placeholder="例：客戶電話未接 / 客戶拒收 / 地址錯誤"></textarea>
+        </div>
+
+        <label class="check-row">
+          <input type="checkbox" name="contacted_customer" value="1">
+          已聯絡客戶
+        </label>
+
+        <label class="check-row">
+          <input type="checkbox" name="contacted_store" value="1">
+          已聯絡店家
+        </label>
+
+        <button class="btn warn" name="action" value="report_issue">
+          回報配送異常
+        </button>
+      </form>
+    </details>
+
+  {% elif order.status == 'DELIVERY_ISSUE' %}
+    <h2>配送異常</h2>
+
+    <p class="muted" style="color:#b45309;font-weight:800;">
+      此單已進入配送異常。若商品仍在你手上，請優先退回店家，以降低貨品與現金風險。
+    </p>
+
+    {% if order.payment_method == 'COD' %}
+      <p class="muted" style="color:#b45309;font-weight:800;">
+        COD 單若客戶未付款或拒收，請勿自行完成配送。請將商品退回店家，並依系統紀錄向店家取回已支付之到店取貨款。
+      </p>
+    {% endif %}
+
+    <form method="post">
+      <input type="hidden" name="return_reason" value="配送異常後退回店家">
+      <button class="btn" name="action" value="return_to_store">
+        退回店家
+      </button>
+    </form>
+
+    <a class="btn secondary" href="/line/bind" style="margin-top:10px;">
+      聯絡 Admin
+    </a>
+
+  {% elif order.status == 'RETURNING_TO_STORE' %}
+    <h2>退回店家中</h2>
+
+    <p class="muted">
+      請依導航將商品退回店家。若你已先支付店家款項，
+      請在退回商品時向店家取回款項並保留紀錄。
+    </p>
+
+    <div class="grid-2">
+      {% if pickup_map_url %}
+        <a class="btn secondary" target="_blank" href="{{ pickup_map_url }}">導航回店家</a>
+      {% else %}
+        <button class="btn secondary" disabled>無店家導航</button>
+      {% endif %}
+
+      <a class="btn secondary" href="/line/bind">聯絡 Admin</a>
+    </div>
+
+    <form method="post" style="margin-top:12px;">
+      <div class="form-group">
+        <label>店家是否已退還取貨款？</label>
+        <select name="money_returned_by_store">
+          <option value="NOT_APPLICABLE">不適用</option>
+          <option value="YES">YES / 已退還</option>
+          <option value="NO">NO / 未退還</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>退還金額</label>
+        <input name="amount_returned_twd" type="number" min="0" value="0">
+      </div>
+
+      <div class="form-group">
+        <label>退回備註</label>
+        <textarea name="return_note" rows="3" placeholder="例：商品已退回，店家已退還取貨款"></textarea>
+      </div>
+
+      <label class="check-row">
+        <input type="checkbox" name="contacted_store" value="1">
+        已聯絡店家
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" name="contacted_admin" value="1">
+        需要 Admin 協助
+      </label>
+
+      <button class="btn" name="action" value="returned_to_store">
+        確認已退回店家
+      </button>
+    </form>
+
+  {% elif order.status == 'RETURNED_TO_STORE' %}
+    <h2>等待 Admin 處理</h2>
+
+    <p class="muted">
+      商品已退回店家。請等待 Admin 處理後續對帳、退款或爭議紀錄。
+    </p>
+
+    {% if order.payment_method == 'COD' %}
+      <p class="muted" style="color:#b45309;font-weight:800;">
+        COD 單若客戶未付款或拒收，請勿自行完成配送。<br>
+        請確認店家是否已退還取貨款。若未退還，請聯絡 Admin 並保留證明。
+      </p>
+    {% endif %}
+
+    <a class="btn secondary" href="/line/bind">聯絡 Admin</a>
+
+  {% elif order.status in ['DELIVERED', 'COMPLETED'] %}
+    <h2>配送已完成</h2>
+    <p class="muted">
+      交付方式：{{ order.delivery_method }}<br>
+      {% if order.delivery_method == 'PHOTO_PROOF' %}
+        PHOTO_PROOF 已確認。<br>
+      {% else %}
+        FACE_TO_FACE 已確認。<br>
+      {% endif %}
+      完成時間：{{ order.updated_at }}
+    </p>
+
+    {% if order.delivery_proof_image_url %}
+      <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+        <h3>配送證明</h3>
+        <p class="muted">
+          上傳時間：{{ order.delivery_proof_uploaded_at or '-' }}<br>
+          Email 通知：
+          {% if order.delivery_proof_sent_email_at %}
+            {{ order.delivery_proof_sent_email_at }}
+          {% else %}
+            未寄送或客戶 Email 尚未驗證
+          {% endif %}
+        </p>
+
+        <img
+          src="/proofs/orders/{{ order.order_code }}/delivery"
+          alt="配送證明"
+          style="width:100%;max-height:420px;object-fit:contain;border-radius:12px;border:1px solid #e5e7eb;background:#fff;"
+        >
+      </section>
+    {% endif %}
+
+    <a class="btn" href="/driver/accounting">查看對帳</a>
+
+  {% else %}
+    <h2>目前狀態</h2>
+    <p class="muted">此訂單目前不可由 Shiper 操作。</p>
+  {% endif %}
+</section>
+
+
+<section class="card collapsible" data-open="{% if items|length > 0 %}1{% else %}0{% endif %}">
+  <button type="button" class="collapse-head">
+    <span>商品 / 訂單明細</span>
+    <b class="collapse-icon">−</b>
+  </button>
+
+  <div class="collapse-body">
+    <section class="bill-box">
+      {{ item_bill(items, order) }}
+    </section>
+  </div>
+</section>
+
+
+<section class="card collapsible" data-open="0">
+  <button type="button" class="collapse-head">
+    <span>SmartRoad 分析</span>
+    <b class="collapse-icon">+</b>
+  </button>
+
+  <div class="collapse-body">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+      {{ smartroad_badges(order) }}
+    </div>
+
+    <p class="muted">
+      距離：{{ order.distance_km or 0 }} km / {{ order.distance_band or '-' }}<br>
+      店家路名：{{ order.store_road_name or '-' }}｜
+      門牌：{{ order.store_house_number or '-' }} / {{ order.store_house_parity or 'UNKNOWN' }}<br>
+      客戶路名：{{ order.customer_road_name or '-' }}｜
+      門牌：{{ order.customer_house_number or '-' }} / {{ order.customer_house_parity or 'UNKNOWN' }}<br>
+      {% if order.extra_fee_reason %}
+        困難 / 加價原因：{{ order.extra_fee_reason }}<br>
+      {% endif %}
+    </p>
+
+    <p class="muted" style="color:#b45309;font-weight:700;">
+      SmartRoad 為輔助提示，實際配送仍以 Shiper 現場安全判斷為準。
+    </p>
+  </div>
+</section>
+
+
+<section class="card collapsible" data-open="0">
+  <button type="button" class="collapse-head">
+    <span>Shiper 金流重點</span>
+    <b class="collapse-icon">+</b>
+  </button>
+
+  <div class="collapse-body">
+    {% if settlement.payment_method == "COD" %}
+      <p class="muted">
+        COD 單：Shiper 向客戶收現金，再支付店家與 Admin，剩下是自己的淨收入。
+      </p>
+
+      <div class="grid-2">
+        <div>
+          <span class="muted">向客戶收</span>
+          <h3>{{ settlement.driver_collect_from_customer_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">給店家</span>
+          <h3>{{ settlement.driver_pay_store_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">給 Admin</span>
+          <h3>{{ settlement.driver_pay_admin_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">自己留下</span>
+          <h3>{{ settlement.driver_keep_twd|twd }}</h3>
+        </div>
+      </div>
+
+      <p class="muted">
+        金額檢查：{{ settlement.driver_collect_from_customer_twd|twd }}
+        =
+        {{ settlement.driver_pay_store_twd|twd }}
+        + {{ settlement.driver_pay_admin_twd|twd }}
+        + {{ settlement.driver_keep_twd|twd }}
+      </p>
+
+    {% elif settlement.payment_method in ["BANK_TRANSFER", "PLATFORM"] %}
+      <p class="muted">
+        轉帳單：客戶付款給平台或 Admin，Shiper 不向客戶收現金。
+      </p>
+
+      <div class="grid-2">
+        <div>
+          <span class="muted">向客戶收現金</span>
+          <h3>0 TWD</h3>
+        </div>
+        <div>
+          <span class="muted">平台應付 Shiper</span>
+          <h3>{{ settlement.platform_pay_driver_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">Shiper 配送總收入</span>
+          <h3>{{ settlement.driver_gross_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">平台費 5%</span>
+          <h3>{{ settlement.driver_platform_fee_twd|twd }}</h3>
+        </div>
+      </div>
+
+    {% elif settlement.payment_method == "PREPAID_TO_STORE" %}
+      <p class="muted">
+        客戶已先付款給店家。此類訂單需 Admin 人工確認店家與 Shiper 後續結算。
+      </p>
+
+      <div class="grid-2">
+        <div>
+          <span class="muted">Shiper 向客戶收</span>
+          <h3>{{ settlement.prepaid_driver_collect_customer_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">店家應支援 Shiper</span>
+          <h3>{{ settlement.prepaid_store_pay_driver_support_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">Shiper 平台費</span>
+          <h3>{{ settlement.prepaid_driver_pay_admin_twd|twd }}</h3>
+        </div>
+        <div>
+          <span class="muted">狀態</span>
+          <h3>需人工確認</h3>
+        </div>
+      </div>
+
+    {% else %}
+      <p class="muted">未知付款方式，請聯絡 Admin 確認金流。</p>
+    {% endif %}
+
+    <hr>
+
+    <div class="grid-2">
+      <div>
+        <span class="muted">Shiper 配送總收入</span>
+        <h3>{{ settlement.driver_gross_twd|twd }}</h3>
+      </div>
+      <div>
+        <span class="muted">Shiper 平台費 5%</span>
+        <h3>{{ settlement.driver_platform_fee_twd|twd }}</h3>
+      </div>
+      <div>
+        <span class="muted">Shiper 淨收入</span>
+        <h3>{{ settlement.driver_net_income_twd|twd }}</h3>
+      </div>
+      <div>
+        <span class="muted">對帳狀態</span>
+        <h3>{% if settlement.balance_ok %}對帳正常{% else %}需確認{% endif %}</h3>
+      </div>
+    </div>
+
+    {% if settlement.manual_review %}
+      <p class="muted" style="color:#b45309;font-weight:800;">
+        此單需要 Admin 人工確認：{{ settlement.settlement_note }}
+      </p>
+    {% endif %}
+  </div>
+</section>
+
+
+<section class="card collapsible" data-open="0">
+  <button type="button" class="collapse-head">
+    <span>對帳紀錄</span>
+    <b class="collapse-icon">+</b>
+  </button>
+
+  <div class="collapse-body">
+    {% for e in accounting_entries %}
+      <p>
+        <b>{{ e.entry_type }}</b><br>
+        {{ e.role }} / {{ e.target_code }} / {{ e.direction }} / {{ e.amount_twd|twd }}<br>
+        <span class="muted">{{ e.note }}</span>
+      </p>
+    {% else %}
+      <p class="muted">尚未建立對帳資料。配送完成後會自動建立。</p>
+    {% endfor %}
+  </div>
+</section>
+
+
+<section class="card collapsible" data-open="0">
+  <button type="button" class="collapse-head">
+    <span>BlockFGO 留證紀錄</span>
+    <b class="collapse-icon">+</b>
+  </button>
+
+  <div class="collapse-body">
+    {% for b in blocks %}
+      <p class="muted">
+        {{ b.created_at }}｜{{ b.event_type }}｜{{ b.actor_role }}<br>
+        {{ b.payload_hash[:16] if b.payload_hash else '' }}
+      </p>
+    {% else %}
+      <p class="muted">尚無留證紀錄。</p>
+    {% endfor %}
+  </div>
+</section>
+
+
+<section class="grid-2">
+  <a class="btn secondary" href="/driver">回 Shiper 工作台</a>
+  <a class="btn" href="/driver/accounting">查看對帳</a>
+</section>
+
+
+<script>
+(function(){
+  document.querySelectorAll(".collapsible").forEach(function(card){
+    var head = card.querySelector(".collapse-head");
+    var body = card.querySelector(".collapse-body");
+    var icon = card.querySelector(".collapse-icon");
+
+    if (!head || !body || !icon) return;
+
+    var open = card.getAttribute("data-open") !== "0";
+    body.style.display = open ? "" : "none";
+    icon.textContent = open ? "−" : "+";
+
+    head.addEventListener("click", function(){
+      open = !open;
+      body.style.display = open ? "" : "none";
+      icon.textContent = open ? "−" : "+";
+    });
+  });
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,582 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}我的訂單｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}進度、付款金額、配送狀態、BlockFGO{% endblock %}
+
+{% block content %}
+
+{% macro invoice_type_label(o) %}
+  {% if o.invoice_type == 'RECEIPT' %}
+    收據
+  {% elif o.invoice_type == 'COMPANY_INVOICE' %}
+    公司發票資料
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+{% macro invoice_request_box(o) %}
+  {% if o.invoice_required %}
+    <section class="card" style="background:#fff7ed;border-color:#fed7aa;">
+      <h3>收據 / 發票需求</h3>
+      <p class="muted" style="line-height:1.75;">
+        類型：<b>{{ invoice_type_label(o) }}</b><br>
+        {% if o.invoice_title %}
+          抬頭：<b>{{ o.invoice_title }}</b><br>
+        {% endif %}
+        {% if o.invoice_tax_id %}
+          統一編號：<b>{{ o.invoice_tax_id }}</b><br>
+        {% endif %}
+        {% if o.invoice_note %}
+          備註：{{ o.invoice_note }}<br>
+        {% endif %}
+      </p>
+      <p class="muted">
+        此資訊僅提供店家開立收據 / 發票參考。FUMAP GO V1 不自動開立統一發票。
+      </p>
+    </section>
+  {% endif %}
+{% endmacro %}
+
+{% macro customer_money_box(o, compact=False) %}
+  {% set subtotal = (o.subtotal_twd or 0)|int %}
+  {% set customer_share = (o.customer_delivery_share_twd or 0)|int %}
+  {% set extra_fee = (o.extra_fee_twd or 0)|int %}
+  {% set total = (o.total_twd or 0)|int %}
+
+  {% if customer_share <= 0 and total > subtotal %}
+    {% set customer_share = total - subtotal - extra_fee %}
+  {% endif %}
+
+  {% if customer_share < 0 %}
+    {% set customer_share = 0 %}
+  {% endif %}
+
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+    <h3>{% if compact %}付款摘要{% else %}我的付款金額{% endif %}</h3>
+
+    <div class="grid-2">
+      <div>
+        <span class="muted">商品金額</span>
+        <h3>{{ subtotal|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">客戶配送分攤</span>
+        <h3>{{ customer_share|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">困難 / 雨天加價</span>
+        <h3>{{ extra_fee|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">總付款金額</span>
+        <h3>{{ total|twd }}</h3>
+      </div>
+    </div>
+
+    {% if o.extra_fee_reason %}
+      <p class="muted">
+        加價原因：{{ o.extra_fee_reason }}
+      </p>
+    {% endif %}
+
+    {% if o.payment_method == "COD" %}
+      <p class="muted">
+        付款方式：<b>貨到付款 COD</b><br>
+        請在 Shiper 送達時支付：<b>{{ total|twd }}</b>
+      </p>
+    {% elif o.payment_method in ["BANK_TRANSFER", "PLATFORM"] %}
+      <p class="muted">
+        付款方式：<b>轉帳給平台 / Admin</b><br>
+        需轉帳金額：<b>{{ total|twd }}</b><br>
+        Admin 確認付款後，店家才會處理訂單。
+      </p>
+    {% elif o.payment_method == "PREPAID_TO_STORE" %}
+      <p class="muted">
+        付款方式：<b>已付款給店家 / 店家確認</b><br>
+        若仍有配送分攤或困難加價，請依 Admin / 店家通知處理。
+      </p>
+    {% else %}
+      <p class="muted">
+        付款方式：{{ o.payment_method or '-' }}<br>
+        若付款方式不清楚，請聯絡 Admin。
+      </p>
+    {% endif %}
+
+    <p class="muted">
+      交付方式：
+      {% if o.delivery_method == "PHOTO_PROOF" %}
+        <b>拍照完成 PHOTO_PROOF</b>
+      {% else %}
+        <b>當面交付 FACE_TO_FACE</b>
+      {% endif %}
+    </p>
+  </section>
+{% endmacro %}
+
+
+{% macro payment_proof_status_label(o) %}
+  {% set proof_status = o.payment_proof_status or '' %}
+  {% set payment_status = o.payment_status or '' %}
+
+  {% if payment_status == 'PAID' or proof_status == 'APPROVED' %}
+    <b style="color:#166534;">付款已確認</b>
+  {% elif payment_status in ['REJECTED', 'PENDING_REUPLOAD'] or proof_status == 'REJECTED' %}
+    <b style="color:#991b1b;">需要重新確認</b>
+  {% elif o.payment_proof_image_url %}
+    <b style="color:#92400e;">等待 Admin 確認</b>
+  {% else %}
+    <b>尚未上傳</b>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro payment_status_badge(o) %}
+  {% if o.payment_status == 'PAID' %}
+    <span class="badge ok">已付款</span>
+  {% elif o.payment_status in ['PENDING', 'PENDING_REUPLOAD'] %}
+    <span class="badge warn">付款確認中</span>
+  {% elif o.payment_status == 'REJECTED' %}
+    <span class="badge danger">付款需重傳</span>
+  {% elif o.payment_status == 'COD_COLLECTED' %}
+    <span class="badge ok">COD 已收</span>
+  {% elif o.payment_status == 'UNPAID' %}
+    <span class="badge">未付款</span>
+  {% else %}
+    <span class="badge">{{ o.payment_status or '-' }}</span>
+  {% endif %}
+{% endmacro %}
+
+
+<section class="card">
+  <h2>客戶功能選單</h2>
+  <p class="muted">
+    客戶只看訂單、付款金額、付款確認、配送狀態與 BlockFGO 留證。
+  </p>
+
+  <div class="menu-grid">
+    <a href="/orders">
+      <b>我的訂單</b>
+      <span>查看目前與歷史訂單</span>
+    </a>
+
+    <a href="/show">
+      <b>繼續下單</b>
+      <span>回店家列表選擇商品</span>
+    </a>
+
+    <a href="/blocks">
+      <b>BlockFGO / TimeBlock</b>
+      <span>查看交易留證與未來貢獻紀錄</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>LINE 綁定</b>
+      <span>可額外接收付款與配送通知</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>客服</b>
+      <span>透過 LINE 與 Admin 聯絡</span>
+    </a>
+
+    <a href="/logout">
+      <b>登出</b>
+      <span>離開客戶帳號</span>
+    </a>
+  </div>
+</section>
+
+
+{% if selected_order %}
+<section class="card order-detail-card">
+  <div style="display:flex;justify-content:space-between;gap:12px;">
+    <div>
+      <h2>{{ selected_order.order_code }}</h2>
+      <p class="muted">{{ selected_order.store_name }}</p>
+    </div>
+
+    <span class="badge">{{ selected_order.status }}</span>
+  </div>
+
+  <div class="order-progress">
+    <div class="step {% if selected_order.status in ['CREATED','STORE_ACCEPTED','WAITING_DRIVER','DRIVER_ACCEPTED','PICKED_UP','DELIVERED','COMPLETED'] %}active{% endif %}">
+      下單
+    </div>
+    <div class="step {% if selected_order.status in ['STORE_ACCEPTED','WAITING_DRIVER','DRIVER_ACCEPTED','PICKED_UP','DELIVERED','COMPLETED'] %}active{% endif %}">
+      店家
+    </div>
+    <div class="step {% if selected_order.status in ['WAITING_DRIVER','DRIVER_ACCEPTED','PICKED_UP','DELIVERED','COMPLETED'] %}active{% endif %}">
+      Shiper
+    </div>
+    <div class="step {% if selected_order.status in ['DELIVERED','COMPLETED'] %}active{% endif %}">
+      完成
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">
+    <span class="badge">{{ selected_order.payment_method }}</span>
+    {{ payment_status_badge(selected_order) }}
+    <span class="badge">{{ selected_order.delivery_method }}</span>
+    <span class="badge">SmartRoad {{ selected_order.smartroad_lane or '-' }}</span>
+    {% if selected_order.distance_band %}
+      <span class="badge">{{ selected_order.distance_band }}</span>
+    {% endif %}
+    {% if selected_order.invoice_required %}
+      <span class="badge warn">收據 / 發票</span>
+    {% endif %}
+    {% if selected_order.admin_hold %}
+      <span class="badge danger">Admin 暫停</span>
+    {% endif %}
+  </div>
+
+  {{ customer_money_box(selected_order) }}
+  {{ invoice_request_box(selected_order) }}
+
+  {% if selected_order.payment_method == 'BANK_TRANSFER' %}
+  <section class="card bank-transfer-card">
+    <h3>轉帳付款狀態</h3>
+
+    <p class="muted">
+      狀態：{{ payment_proof_status_label(selected_order) }}<br>
+      付款狀態：{{ selected_order.payment_status or '-' }}<br>
+      付款證明狀態：{{ selected_order.payment_proof_status or '-' }}<br>
+      上傳時間：{{ selected_order.payment_proof_uploaded_at or '-' }}<br>
+      確認時間：{{ selected_order.payment_verified_at or selected_order.payment_proof_reviewed_at or '-' }}
+    </p>
+
+    {% if selected_order.payment_reject_reason %}
+      <section class="card" style="background:#fff1f2;border-color:#fecdd3;">
+        <h3>需要重新確認</h3>
+        <p class="muted">
+          原因：{{ selected_order.payment_reject_reason }}<br>
+          處理時間：{{ selected_order.payment_rejected_at or '-' }}
+        </p>
+      </section>
+    {% endif %}
+
+    {% if selected_order.payment_status in ['PENDING', 'PENDING_REUPLOAD', 'REJECTED'] or selected_order.payment_proof_status in ['', 'REJECTED', 'WAITING_UPLOAD', 'PENDING_REVIEW'] %}
+      <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+        <h3>平台轉帳資訊</h3>
+
+        <div class="payment-amount-box">
+          <span>本訂單應付款</span>
+          <b>{{ selected_order.total_twd|twd }}</b>
+          <small>訂單編號：{{ selected_order.order_code }}</small>
+        </div>
+
+        <div class="info-grid">
+          <div>
+            <span class="muted">付款方式</span>
+            <b>{{ platform_payment_info.linepay_name or '平台銀行轉帳' }}</b>
+          </div>
+
+          <div>
+            <span class="muted">銀行</span>
+            <b>{{ platform_payment_info.bank_name or '-' }}</b>
+          </div>
+
+          <div>
+            <span class="muted">銀行代碼</span>
+            <b>{{ platform_payment_info.bank_code or '-' }}</b>
+          </div>
+
+          <div>
+            <span class="muted">帳號</span>
+            <b>{{ platform_payment_info.bank_account or '-' }}</b>
+          </div>
+        </div>
+
+        <p class="muted">
+          帳戶資訊：{{ platform_payment_info.payment_account or '-' }}<br>
+          備註：{{ platform_payment_info.bank_note or '請轉帳後在本頁上傳付款截圖。' }}
+        </p>
+
+        {% if platform_payment_info.linepay_qr_url %}
+          <img class="payment-qr" src="{{ platform_payment_info.linepay_qr_url }}" alt="付款 QR">
+        {% endif %}
+
+        {% if platform_payment_info.line_admin_url %}
+          <a class="btn secondary" target="_blank" href="{{ platform_payment_info.line_admin_url }}">
+            聯絡 LINE Admin
+          </a>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    <section class="card" style="margin-top:12px;background:#f8fafc;border-color:#cbd5e1;">
+      <h3>轉帳證明</h3>
+
+      {% if selected_order.payment_proof_image_url %}
+        <div style="margin:10px 0;">
+          <img
+            src="/proofs/orders/{{ selected_order.order_code }}/payment"
+            alt="轉帳證明"
+            style="width:100%;max-height:360px;object-fit:contain;border-radius:12px;border:1px solid #e5e7eb;background:#fff;"
+          >
+        </div>
+
+        <p class="muted">
+          若 Admin 要求重新確認，可以重新上傳。重新上傳後狀態會回到等待 Admin 確認。
+        </p>
+      {% else %}
+        <p class="muted">
+          完成轉帳後，請上傳截圖。Admin 確認前，店家不會處理此訂單。
+        </p>
+      {% endif %}
+
+      {% if selected_order.payment_status != 'PAID' %}
+        <form
+          method="post"
+          action="/customer/orders/{{ selected_order.order_code }}/payment-proof"
+          enctype="multipart/form-data"
+          style="margin-top:12px;"
+        >
+          <div class="form-group">
+            <label>上傳 / 重新上傳轉帳證明圖片</label>
+            <input
+              type="file"
+              name="payment_proof"
+              accept="image/*"
+              capture="environment"
+              required
+            >
+          </div>
+
+          <button class="btn" type="submit">上傳轉帳證明</button>
+        </form>
+      {% endif %}
+    </section>
+  </section>
+  {% endif %}
+
+  {% if selected_order.delivery_proof_image_url %}
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+    <h3>配送證明</h3>
+
+    <p class="muted">
+      送達狀態：<b>已送達</b><br>
+      上傳時間：{{ selected_order.delivery_proof_uploaded_at or '-' }}<br>
+      Email 通知：
+      {% if selected_order.delivery_proof_sent_email_at %}
+        {{ selected_order.delivery_proof_sent_email_at }}
+      {% else %}
+        未寄送或 Email 尚未驗證
+      {% endif %}
+    </p>
+
+    <div style="margin:10px 0;">
+      <img
+        src="/proofs/orders/{{ selected_order.order_code }}/delivery"
+        alt="配送證明"
+        style="width:100%;max-height:360px;object-fit:contain;border-radius:12px;border:1px solid #e5e7eb;background:#fff;"
+      >
+    </div>
+
+    <p class="muted">
+      配送證明保存於系統中，用於訂單留證與客服處理。
+    </p>
+  </section>
+  {% endif %}
+
+  {% if selected_order.admin_hold %}
+  <section class="card" style="background:#fff1f2;border-color:#fecdd3;">
+    <h3>訂單暫停中</h3>
+    <p class="muted">
+      原因：{{ selected_order.admin_hold_reason or '付款或訂單資料需要確認' }}<br>
+      請等待 Admin 或客服通知。
+    </p>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>配送資訊</h3>
+    <div class="info-grid">
+      <div>
+        <span class="muted">距離級距</span>
+        <b>{{ selected_order.distance_band or '-' }}</b>
+      </div>
+
+      <div>
+        <span class="muted">距離 km</span>
+        <b>{{ selected_order.distance_km or 0 }} km</b>
+      </div>
+
+      <div>
+        <span class="muted">配送狀態</span>
+        <b>{{ selected_order.status }}</b>
+      </div>
+
+      <div>
+        <span class="muted">付款狀態</span>
+        <b>{{ selected_order.payment_status }}</b>
+      </div>
+    </div>
+  </section>
+
+  <h3>聯絡資訊</h3>
+  <div class="contact-card">
+    <div>
+      <span class="muted">店家</span>
+      <b>{{ selected_order.store_name }}</b>
+      {% if selected_order.store_phone %}
+        <a href="tel:{{ selected_order.store_phone }}">撥打店家：{{ selected_order.store_phone }}</a>
+      {% else %}
+        <span class="muted">店家未填電話</span>
+      {% endif %}
+    </div>
+
+    <div>
+      <span class="muted">Shiper</span>
+      <b>{{ selected_order.driver_name or '尚未接單' }}</b>
+      {% if selected_order.driver_phone %}
+        <a href="tel:{{ selected_order.driver_phone }}">撥打 Shiper：{{ selected_order.driver_phone }}</a>
+      {% else %}
+        <span class="muted">Shiper 接單後會顯示電話</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <h3>配送地址</h3>
+  <p class="muted">
+    {{ selected_order.delivery_address }} {{ selected_order.floor_number or '' }}<br>
+    {{ selected_order.address_note or '-' }}
+  </p>
+
+  <h3>商品</h3>
+  {% for i in selected_items %}
+    <p>
+      <b>{{ i.product_name }}</b><br>
+      {{ i.unit_price_twd|twd }} x {{ i.qty }} = {{ i.line_total_twd|twd }}
+    </p>
+  {% else %}
+    <p class="muted">沒有商品資料。</p>
+  {% endfor %}
+
+  <h3>BlockFGO 留證紀錄</h3>
+  {% for b in selected_blocks %}
+    <p class="muted">
+      {{ b.created_at }}｜{{ b.event_type }}｜{{ b.actor_role }}<br>
+      {{ b.payload_hash[:16] if b.payload_hash else '' }}
+    </p>
+  {% else %}
+    <p class="muted">尚無留證紀錄。</p>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section>
+  <div class="section-title">
+    <h2>訂單列表</h2>
+    <span class="badge">{{ orders|length }} 筆</span>
+  </div>
+
+  {% for o in orders %}
+  <section class="order-card" id="{{ o.order_code }}">
+    <div class="order-card-head">
+      <div>
+        <h3>{{ o.order_code }}</h3>
+        <p class="muted">{{ o.store_name }}</p>
+      </div>
+
+      <span class="badge">{{ o.status }}</span>
+    </div>
+
+    <div class="order-progress small">
+      <div class="step {% if o.status in ['CREATED','STORE_ACCEPTED','WAITING_DRIVER','DRIVER_ACCEPTED','PICKED_UP','DELIVERED','COMPLETED'] %}active{% endif %}">
+        下單
+      </div>
+      <div class="step {% if o.status in ['STORE_ACCEPTED','WAITING_DRIVER','DRIVER_ACCEPTED','PICKED_UP','DELIVERED','COMPLETED'] %}active{% endif %}">
+        店家
+      </div>
+      <div class="step {% if o.status in ['WAITING_DRIVER','DRIVER_ACCEPTED','PICKED_UP','DELIVERED','COMPLETED'] %}active{% endif %}">
+        配送
+      </div>
+      <div class="step {% if o.status in ['DELIVERED','COMPLETED'] %}active{% endif %}">
+        完成
+      </div>
+    </div>
+
+    {% if o.invoice_required %}
+      <section class="payment-pending-mini">
+        <b>收據 / 發票需求</b>
+        <span>{{ invoice_type_label(o) }}{% if o.invoice_tax_id %}｜統編 {{ o.invoice_tax_id }}{% endif %}</span>
+      </section>
+    {% endif %}
+
+    {% if o.payment_method == 'BANK_TRANSFER' %}
+      <section class="payment-pending-mini">
+        <b>轉帳付款</b>
+        {% if o.payment_status == 'PAID' %}
+          <span>付款已確認</span>
+        {% elif o.payment_reject_reason or o.payment_status in ['REJECTED', 'PENDING_REUPLOAD'] %}
+          <span>需要重新確認：{{ o.payment_reject_reason or '請查看明細' }}</span>
+        {% elif o.payment_proof_image_url %}
+          <span>付款截圖已上傳，等待 Admin 確認</span>
+        {% else %}
+          <span>請打開明細上傳付款截圖</span>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    {% if o.delivery_proof_image_url %}
+      <section class="payment-pending-mini">
+        <b>配送證明已保存</b>
+        <span>可打開明細查看配送留證</span>
+      </section>
+    {% endif %}
+
+    {{ customer_money_box(o, compact=True) }}
+
+    <p>
+      付款：{{ o.payment_method }} / {{ o.payment_status }}<br>
+      {% if o.payment_method == 'BANK_TRANSFER' %}
+        轉帳證明：{{ payment_proof_status_label(o) }}<br>
+      {% endif %}
+      配送證明：
+      {% if o.delivery_proof_image_url %}
+        已保存<br>
+      {% else %}
+        尚未保存<br>
+      {% endif %}
+      交付：{{ o.delivery_method }}<br>
+      地址：{{ o.delivery_address }} {{ o.floor_number or '' }}
+    </p>
+
+    <div class="contact-card compact-contact">
+      <div>
+        <span class="muted">店家電話</span>
+        {% if o.store_phone %}
+          <a href="tel:{{ o.store_phone }}">{{ o.store_phone }}</a>
+        {% else %}
+          <span>-</span>
+        {% endif %}
+      </div>
+
+      <div>
+        <span class="muted">Shiper 電話</span>
+        {% if o.driver_phone %}
+          <a href="tel:{{ o.driver_phone }}">{{ o.driver_phone }}</a>
+        {% else %}
+          <span>接單後顯示</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:10px;">
+      <a class="btn secondary" href="/orders?order_code={{ o.order_code }}">查看明細</a>
+      <a class="btn secondary" href="/blocks/order/{{ o.order_code }}">BlockFGO</a>
+    </div>
+  </section>
+  {% else %}
+  <section class="empty">
+    <h3>尚未建立訂單</h3>
+    <p>請先到店家列表選擇商品。</p>
+    <a class="btn" href="/show">去看店</a>
+  </section>
+  {% endfor %}
+</section>
+{% endblock %}

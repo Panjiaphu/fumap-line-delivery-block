@@ -1,0 +1,379 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}訂單管理｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}查看、付款確認、暫停與解除暫停{% endblock %}
+
+{% block content %}
+
+{% macro payment_proof_status_label(o) %}
+  {% if o.payment_status == 'PAID' or o.payment_proof_status == 'APPROVED' %}
+    <b style="color:#166534;">已確認</b>
+  {% elif o.payment_status in ['REJECTED', 'PENDING_REUPLOAD'] or o.payment_proof_status == 'REJECTED' %}
+    <b style="color:#991b1b;">需重新確認</b>
+  {% elif o.payment_proof_image_url %}
+    <b style="color:#92400e;">等待 Admin 確認</b>
+  {% else %}
+    <b>尚未上傳</b>
+  {% endif %}
+{% endmacro %}
+
+{% macro invoice_type_label(o) %}
+  {% if o.invoice_type == 'RECEIPT' %}
+    收據
+  {% elif o.invoice_type == 'COMPANY_INVOICE' %}
+    公司發票資料
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+{% macro invoice_request_box(o) %}
+  {% if o.invoice_required %}
+    <section class="card" style="background:#fff7ed;border-color:#fed7aa;">
+      <h3>收據 / 發票需求</h3>
+      <p class="muted" style="line-height:1.75;">
+        類型：<b>{{ invoice_type_label(o) }}</b><br>
+        {% if o.invoice_title %}
+          抬頭：<b>{{ o.invoice_title }}</b><br>
+        {% endif %}
+        {% if o.invoice_tax_id %}
+          統一編號：<b>{{ o.invoice_tax_id }}</b><br>
+        {% endif %}
+        {% if o.invoice_note %}
+          備註：{{ o.invoice_note }}<br>
+        {% endif %}
+      </p>
+      <p class="muted">
+        此資訊僅供店家開立收據 / 發票參考，FUMAP GO V1 不自動開立統一發票。
+      </p>
+    </section>
+  {% endif %}
+{% endmacro %}
+
+{% macro admin_money_box(o) %}
+  {% set subtotal = (o.subtotal_twd or 0)|int %}
+  {% set support = (o.store_delivery_support_twd or 0)|int %}
+  {% set delivery_fee = (o.delivery_fee_twd or 0)|int %}
+  {% set extra_fee = (o.extra_fee_twd or 0)|int %}
+  {% set total = (o.total_twd or 0)|int %}
+  {% set store_fee = ((subtotal * 5 + 99) // 100) %}
+  {% set driver_gross = delivery_fee + extra_fee %}
+  {% set driver_fee = ((driver_gross * 5 + 99) // 100) %}
+  {% set platform_total = store_fee + driver_fee %}
+  {% set shiper_pay_store = subtotal - support %}
+  {% if shiper_pay_store < 0 %}
+    {% set shiper_pay_store = 0 %}
+  {% endif %}
+  {% set store_net = shiper_pay_store - store_fee %}
+  {% if store_net < 0 %}
+    {% set store_net = 0 %}
+  {% endif %}
+  {% set driver_net = driver_gross - driver_fee %}
+  {% if driver_net < 0 %}
+    {% set driver_net = 0 %}
+  {% endif %}
+
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+    <h3>平台 / Admin 金流</h3>
+
+    <div class="grid-2">
+      <div>
+        <span class="muted">店家欠 Admin</span>
+        <h3>{{ store_fee|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">Shiper 欠 Admin</span>
+        <h3>{{ driver_fee|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">平台總收入</span>
+        <h3>{{ platform_total|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">Shiper 到店付款</span>
+        <h3>{{ shiper_pay_store|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">店家結算後實收</span>
+        <h3>{{ store_net|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">Shiper 結算後實得</span>
+        <h3>{{ driver_net|twd }}</h3>
+      </div>
+    </div>
+
+    <p class="muted" style="line-height:1.75;">
+      商品金額：{{ subtotal|twd }}｜
+      店家支援配送：{{ support|twd }}｜
+      配送總費用：{{ driver_gross|twd }}｜
+      客戶總付：{{ total|twd }}<br>
+      店家與 Shiper 各自結算，不互相代收。
+    </p>
+  </section>
+{% endmacro %}
+
+<section class="card">
+  <h2>訂單管理</h2>
+  <p class="muted">
+    轉帳單需由 Admin 確認付款。確認前訂單會被 admin_hold 暫停；
+    確認付款後解除暫停，店家才開始處理。
+  </p>
+
+  {% if rain_surcharge_enabled %}
+    <span class="badge warn">雨天加價 ON</span>
+  {% else %}
+    <span class="badge">雨天加價 OFF</span>
+  {% endif %}
+
+  <span class="badge danger">暫停 {{ hold_count }}</span>
+  <span class="badge warn">轉帳待確認 {{ pending_transfer_count }}</span>
+</section>
+
+<section class="card">
+  <h2>快速篩選</h2>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <a class="badge" href="/admin/orders">全部</a>
+    <a class="badge {% if hold == '1' %}danger{% endif %}" href="/admin/orders?hold=1">暫停訂單</a>
+    <a class="badge {% if hold == '0' %}ok{% endif %}" href="/admin/orders?hold=0">正常訂單</a>
+  </div>
+
+  {% if order_code is defined and order_code %}
+    <p class="muted" style="margin-top:10px;">
+      目前查看訂單：<b>{{ order_code }}</b>
+      <a class="badge" href="/admin/orders">清除</a>
+    </p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>狀態篩選</h2>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    {% for status_name, count in status_counts.items() %}
+      <a class="badge {% if status == status_name %}ok{% endif %}" href="/admin/orders?status={{ status_name }}">
+        {{ status_name }} {{ count }}
+      </a>
+    {% endfor %}
+  </div>
+</section>
+
+{% for o in orders %}
+<section class="card" id="{{ o.order_code }}">
+  <h2>{{ o.order_code }}</h2>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+    <span class="badge">{{ o.status }}</span>
+    <span class="badge">{{ o.payment_method }}</span>
+
+    {% if o.payment_status == 'PAID' %}
+      <span class="badge ok">PAID</span>
+    {% elif o.payment_status in ['PENDING', 'PENDING_REUPLOAD'] %}
+      <span class="badge warn">{{ o.payment_status }}</span>
+    {% elif o.payment_status == 'REJECTED' %}
+      <span class="badge danger">REJECTED</span>
+    {% else %}
+      <span class="badge">{{ o.payment_status }}</span>
+    {% endif %}
+
+    <span class="badge">{{ o.delivery_method }}</span>
+
+    {% if o.invoice_required %}
+      <span class="badge warn">收據 / 發票</span>
+    {% endif %}
+
+    {% if o.admin_hold %}
+      <span class="badge danger">ADMIN HOLD</span>
+    {% endif %}
+  </div>
+
+  {{ admin_money_box(o) }}
+
+  {% if o.admin_hold %}
+  <section class="card" style="background:#fff1f2;border-color:#fecdd3;">
+    <h3>此訂單已暫停</h3>
+    <p class="muted">
+      原因：{{ o.admin_hold_reason or '付款或訂單資料需人工確認' }}<br>
+      時間：{{ o.admin_hold_at or '-' }}
+    </p>
+  </section>
+  {% endif %}
+
+  {% if o.payment_method == 'BANK_TRANSFER' %}
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+    <h3>轉帳付款審核</h3>
+
+    <p class="muted">
+      狀態：{{ payment_proof_status_label(o) }}<br>
+      上傳時間：{{ o.payment_proof_uploaded_at or '-' }}<br>
+      確認時間：{{ o.payment_verified_at or o.payment_proof_reviewed_at or '-' }}<br>
+      拒絕時間：{{ o.payment_rejected_at or '-' }}<br>
+      拒絕原因：{{ o.payment_reject_reason or '-' }}<br>
+      付款狀態：{{ o.payment_status or '-' }}<br>
+      訂單金額：<b>{{ o.total_twd|twd }}</b>
+    </p>
+
+    {% if o.payment_proof_image_url %}
+      <div style="margin:10px 0;">
+        <img
+          src="/proofs/orders/{{ o.order_code }}/payment"
+          alt="轉帳證明"
+          style="width:100%;max-height:420px;object-fit:contain;border-radius:12px;border:1px solid #e5e7eb;background:#fff;"
+        >
+      </div>
+
+      <a class="btn secondary" target="_blank" href="/proofs/orders/{{ o.order_code }}/payment">
+        開啟付款證明圖片
+      </a>
+    {% else %}
+      <p class="muted">
+        客戶尚未上傳轉帳截圖。
+      </p>
+    {% endif %}
+
+    {% if o.payment_proof_image_url and o.payment_status != 'PAID' %}
+      <form method="post" action="/admin/orders/{{ o.order_code }}/action" style="margin-top:12px;">
+        <div class="grid-2">
+          <button class="btn" name="action" value="approve_payment">
+            確認付款
+          </button>
+          <button class="btn secondary" name="action" value="mark_paid">
+            設為已付款
+          </button>
+        </div>
+      </form>
+
+      <details style="margin-top:12px;">
+        <summary class="muted" style="font-weight:800;">要求重傳 / 退回付款證明</summary>
+
+        <form method="post" action="/admin/orders/{{ o.order_code }}/action" style="margin-top:10px;">
+          <div class="form-group">
+            <label>退回原因</label>
+            <input
+              name="reject_reason"
+              value="{{ o.payment_reject_reason or '' }}"
+              placeholder="例：金額不符 / 截圖不清楚 / 未看到入帳"
+              required
+            >
+          </div>
+
+          <button class="btn danger" name="action" value="reject_payment">
+            要求重傳 / 退回
+          </button>
+        </form>
+      </details>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <p class="muted">
+    店家：{{ o.store_name }} / {{ o.store_code }}<br>
+    Shiper：{{ o.driver_name or '-' }} / {{ o.driver_code or '-' }}<br>
+    客戶：{{ o.customer_name }} / {{ o.customer_phone }}<br>
+    地址：{{ o.delivery_address }} {{ o.floor_number or '' }}<br>
+    地址備註：{{ o.address_note or '-' }}<br>
+    其他備註：{{ o.note or '-' }}<br>
+    區域：{{ o.area_label or '-' }} / SmartRoad：{{ o.smartroad_lane or '-' }}<br>
+    商品金額：{{ o.subtotal_twd|twd }}<br>
+    配送總費用：{{ o.delivery_fee_twd|twd }}<br>
+    店家支援配送：{{ o.store_delivery_support_twd|twd }}<br>
+    困難配送：{{ o.extra_fee_twd|twd }}{% if o.extra_fee_reason %} / {{ o.extra_fee_reason }}{% endif %}<br>
+    雨天費：{{ o.rain_fee_twd|twd }}<br>
+    總金額：<b>{{ o.total_twd|twd }}</b><br>
+    建立：{{ o.created_at }}
+  </p>
+
+  {{ invoice_request_box(o) }}
+
+  <section style="margin-top:8px;padding:10px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;">
+    <b>SmartRoad</b>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+      {% if o.smartroad_lane == 'GREEN' %}
+        <span class="badge ok">GREEN</span>
+      {% elif o.smartroad_lane == 'RED' %}
+        <span class="badge danger">RED</span>
+      {% elif o.smartroad_lane == 'YELLOW' %}
+        <span class="badge warn">YELLOW</span>
+      {% else %}
+        <span class="badge">{{ o.smartroad_lane or 'UNKNOWN' }}</span>
+      {% endif %}
+
+      <span class="badge">Score {{ o.smartroad_score or 50 }}</span>
+      <span class="badge">{{ o.smartroad_score_label or 'UNKNOWN' }}</span>
+
+      {% if o.smartroad_same_road %}
+        <span class="badge ok">同路線</span>
+      {% else %}
+        <span class="badge">不同路線 / 未知</span>
+      {% endif %}
+
+      {% if o.smartroad_same_side %}
+        <span class="badge ok">同側</span>
+      {% else %}
+        <span class="badge">不同側 / 未知</span>
+      {% endif %}
+
+      {% if o.smartroad_uturn_risk %}
+        <span class="badge warn">可能需迴轉</span>
+      {% else %}
+        <span class="badge ok">無迴轉風險</span>
+      {% endif %}
+    </div>
+
+    <p class="muted">
+      店家路名：{{ o.store_road_name or '-' }}｜
+      店家門牌：{{ o.store_house_number or '-' }} / {{ o.store_house_parity or 'UNKNOWN' }}<br>
+      客戶路名：{{ o.customer_road_name or '-' }}｜
+      客戶門牌：{{ o.customer_house_number or '-' }} / {{ o.customer_house_parity or 'UNKNOWN' }}<br>
+      距離：{{ o.distance_km or 0 }} km / {{ o.distance_band or '-' }}
+    </p>
+
+    {% if o.smartroad_reasons_json %}
+      <details>
+        <summary>SmartRoad reasons</summary>
+        <pre style="white-space:pre-wrap;font-size:12px;">{{ o.smartroad_reasons_json }}</pre>
+      </details>
+    {% endif %}
+  </section>
+
+  <div class="grid-2" style="margin-top:10px;">
+    <a class="btn secondary" href="/blocks/order/{{ o.order_code }}">BlockFGO</a>
+    <a class="btn secondary" href="/admin/orders?status={{ o.status }}">同狀態</a>
+  </div>
+
+  <form method="post" action="/admin/orders/{{ o.order_code }}/action" style="margin-top:10px;">
+    <div class="form-group">
+      <label>暫停原因</label>
+      <input name="hold_reason" value="{{ o.admin_hold_reason or '' }}" placeholder="例：轉帳截圖未收到 / 金額不符 / 客戶資料需確認">
+    </div>
+
+    <div class="grid-2">
+      <button class="btn secondary" name="action" value="mark_paid">設為已付款</button>
+      <button class="btn" name="action" value="complete">完成對帳</button>
+
+      {% if o.admin_hold %}
+        <button class="btn" name="action" value="release_hold">解除暫停</button>
+      {% else %}
+        <button class="btn warn" name="action" value="hold">暫停訂單</button>
+      {% endif %}
+
+      <button class="btn warn" name="action" value="dispute">標記爭議</button>
+      <button class="btn danger" name="action" value="cancel">取消訂單</button>
+    </div>
+  </form>
+</section>
+{% else %}
+<section class="empty">
+  <h3>沒有訂單</h3>
+</section>
+{% endfor %}
+
+<section class="card">
+  <a class="btn secondary" href="/admin">回 Admin</a>
+</section>
+{% endblock %}

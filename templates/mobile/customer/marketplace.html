@@ -1,0 +1,230 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}看店下單｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}桃園・中壢在地買貨外送{% endblock %}
+
+{% block content %}
+<section class="customer-hero compact-hero">
+  <div class="hero-glow"></div>
+
+  <div class="customer-hero-content">
+    <span class="mini-badge">FUMAP GO 商業版 V1</span>
+    <h2>看店・選商品・快速下單</h2>
+    <p>
+      店家接單、Shiper 配送、BlockFGO 留證。
+      客戶看到的是最終總價，流程以區域配送與透明對帳為主。
+    </p>
+
+    <div class="hero-actions">
+      <a class="btn" href="#stores">立即看店</a>
+      <a class="btn secondary" href="/orders">我的訂單</a>
+    </div>
+  </div>
+</section>
+
+
+<section class="search-panel compact-search">
+  <form method="get" action="/show">
+    <label>選擇配送區域</label>
+
+    <div class="area-tabs">
+      <a
+        class="area-tab {% if not selected_city_block %}active{% endif %}"
+        href="/show"
+      >
+        全部
+      </a>
+
+      <a
+        class="area-tab {% if selected_city_block == 'ZHONGLI' %}active{% endif %}"
+        href="/show?city_block=ZHONGLI"
+      >
+        中壢
+      </a>
+
+      <a
+        class="area-tab {% if selected_city_block == 'TAOYUAN' %}active{% endif %}"
+        href="/show?city_block=TAOYUAN"
+      >
+        桃園
+      </a>
+    </div>
+
+    <p class="muted">
+      商業版 V1 先以區域區塊控制配送。後續可接 GPS 與地圖資料做更精準的距離判斷。
+    </p>
+  </form>
+</section>
+
+
+<section class="horizontal-section">
+  <div class="section-title">
+    <h2>熱門分類</h2>
+    <span class="badge">滑動選擇</span>
+  </div>
+
+  <div class="chip-scroll">
+    <span class="food-chip active">全部</span>
+    <span class="food-chip">港式燒臘</span>
+    <span class="food-chip">便當</span>
+    <span class="food-chip">飲料</span>
+    <span class="food-chip">跑腿買貨</span>
+    <span class="food-chip">宵夜</span>
+  </div>
+</section>
+
+
+<section class="card collapsible" data-open="0">
+  <button type="button" class="collapse-head customer-rules-summary">
+    <span>
+      平台規則
+      <small>LINE 通知・SmartRoad・BlockFGO・透明費用</small>
+    </span>
+    <b class="collapse-icon">+</b>
+  </button>
+
+  <div class="collapse-body">
+    <div class="feature-grid trust-grid">
+      <div class="feature-card">
+        <h3>LINE 通知</h3>
+        <p>訂單與配送通知</p>
+      </div>
+
+      <div class="feature-card">
+        <h3>SmartRoad</h3>
+        <p>區域與路線提示</p>
+      </div>
+
+      <div class="feature-card">
+        <h3>BlockFGO</h3>
+        <p>交易證據紀錄</p>
+      </div>
+
+      <div class="feature-card">
+        <h3>透明費用</h3>
+        <p>店家 / Shiper 各 5%</p>
+      </div>
+    </div>
+
+    <p class="muted" style="margin-top:10px;">
+      平台規則以實際訂單、金流對帳與 BlockFGO 留證為準。
+      SmartRoad 為輔助提示，實際配送仍以 Shiper 現場安全判斷為準。
+    </p>
+  </div>
+</section>
+
+
+<section id="stores" class="horizontal-section">
+  <div class="section-title">
+    <h2>附近店家</h2>
+    <span class="badge">{{ stores|length }} 間可查看</span>
+  </div>
+
+  {% if stores %}
+    <div class="store-rail">
+      {% for s in stores %}
+        {% set bh = s.business_hours_status if s.business_hours_status is defined else none %}
+        <a class="mini-store-card" href="/show/store/{{ s.store_code }}">
+          {% if s.banner_url %}
+            <img src="{{ s.banner_url }}" alt="{{ s.store_name }}">
+          {% else %}
+            <div class="mini-store-placeholder">
+              <span>{{ s.store_name[:1] if s.store_name else '店' }}</span>
+            </div>
+          {% endif %}
+
+          <div class="mini-store-body">
+            <div class="mini-store-top">
+              <b>{{ s.store_name }}</b>
+
+              {% if s.accepting_orders %}
+                <span class="mini-open ok">目前可接單</span>
+              {% else %}
+                <span class="mini-open">
+                  {{ s.accepting_orders_label or '目前不接單' }}
+                </span>
+              {% endif %}
+            </div>
+
+            <p>
+              {{ s.description or s.address or '在地店家' }}
+            </p>
+
+            <div class="mini-store-meta">
+              <span>{{ s.area_label or '中壢區' }}</span>
+              <span>{{ s.category or 'FOOD' }}</span>
+              <span>商品 {{ s.product_count or 0 }}</span>
+            </div>
+
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">
+              {% if s.accepting_orders %}
+                <span class="badge ok">可接單</span>
+              {% else %}
+                <span class="badge warn">{{ s.accepting_orders_label or '目前不接單' }}</span>
+              {% endif %}
+
+              {% if bh %}
+                <span class="badge">
+                  {{ bh.open_time }}-{{ bh.close_time }}
+                </span>
+                <span class="badge">
+                  最後 {{ bh.cutoff_time }}
+                </span>
+              {% endif %}
+            </div>
+
+            {% if not s.accepting_orders %}
+              <p class="muted" style="margin:6px 0 0;font-size:12px;line-height:1.5;">
+                {{ s.accepting_orders_reason or '店家目前暫不接收新訂單。' }}
+              </p>
+            {% endif %}
+
+            <div class="mini-store-action">
+              <span>查看商品</span>
+              <b>→</b>
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <section class="empty">
+      <h3>目前沒有店家</h3>
+      <p class="muted">請切換區域或稍後再試。</p>
+      <a class="btn secondary" href="/show">查看全部區域</a>
+    </section>
+  {% endif %}
+</section>
+
+
+<section class="card customer-note-card">
+  <h2>下單前提醒</h2>
+  <p class="muted">
+    請確認店家接單狀態、配送地址與電話正確。
+    店家若顯示休息、今日店休、尚未開店、已打烊或已過最後接單時間，系統不會建立新訂單。
+  </p>
+</section>
+
+
+<script>
+(function(){
+  document.querySelectorAll(".collapsible").forEach(function(card){
+    var head = card.querySelector(".collapse-head");
+    var body = card.querySelector(".collapse-body");
+    var icon = card.querySelector(".collapse-icon");
+
+    if (!head || !body || !icon) return;
+
+    var open = card.getAttribute("data-open") !== "0";
+    body.style.display = open ? "" : "none";
+    icon.textContent = open ? "−" : "+";
+
+    head.addEventListener("click", function(){
+      open = !open;
+      body.style.display = open ? "" : "none";
+      icon.textContent = open ? "−" : "+";
+    });
+  });
+})();
+</script>
+{% endblock %}

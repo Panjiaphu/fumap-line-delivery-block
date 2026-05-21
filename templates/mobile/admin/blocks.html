@@ -1,0 +1,63 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}Admin BlockFGO｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}交易證據、狀態變更與操作紀錄{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h2>BlockFGO 證據</h2>
+  <p>所有重要操作都會留下 block，作為交易與爭議處理依據。</p>
+</section>
+
+<section class="card">
+  <h2>篩選</h2>
+
+  <form method="get" action="/admin/blocks">
+    <div class="form-group">
+      <label>訂單編號</label>
+      <input name="order_code" value="{{ selected_order_code or '' }}" placeholder="FGO-...">
+    </div>
+
+    <div class="form-group">
+      <label>事件類型</label>
+      <select name="event_type">
+        <option value="">全部</option>
+        {% for e in event_types %}
+          <option value="{{ e.event_type }}" {% if selected_event_type == e.event_type %}selected{% endif %}>
+            {{ e.event_type }} ({{ e.c }})
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <button class="btn" type="submit">查詢</button>
+  </form>
+</section>
+
+{% for b in blocks %}
+<section class="card">
+  <h2>{{ b.event_type }}</h2>
+  <p class="muted">
+    時間：{{ b.created_at }}<br>
+    Block：{{ b.block_code }}<br>
+    Actor：{{ b.actor_role }} / {{ b.actor_code or '-' }}<br>
+    訂單：{{ b.order_code or '-' }}<br>
+    狀態：{{ b.previous_status or '-' }} → {{ b.new_status or '-' }}<br>
+    金額：{{ b.amount_twd|twd }}<br>
+    Hash：{{ b.payload_hash }}
+  </p>
+
+  {% if b.order_code %}
+    <a class="btn secondary" href="/blocks/order/{{ b.order_code }}">查看訂單時間線</a>
+  {% endif %}
+</section>
+{% else %}
+<section class="empty">
+  <h3>沒有符合條件的 Block</h3>
+</section>
+{% endfor %}
+
+<section class="card">
+  <a class="btn secondary" href="/admin">回 Admin</a>
+</section>
+{% endblock %}

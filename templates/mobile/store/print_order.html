@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>列印訂單｜{{ order.order_code }}</title>
+
+  <style>
+    :root {
+      --ink: #111827;
+      --muted: #4b5563;
+      --line: #111827;
+      --soft-line: #d1d5db;
+      --bg: #f3f4f6;
+      --paper: #ffffff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "Noto Sans TC",
+        "Microsoft JhengHei",
+        Arial,
+        sans-serif;
+    }
+
+    body { padding: 16px; }
+
+    .no-print {
+      max-width: 420px;
+      margin: 0 auto 14px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid #111827;
+      background: #111827;
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 900;
+      font-size: 14px;
+      cursor: pointer;
+      line-height: 1.2;
+    }
+
+    .btn.secondary {
+      background: #ffffff;
+      color: #111827;
+    }
+
+    .hint {
+      max-width: 420px;
+      margin: 0 auto 14px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      color: #4b5563;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .paper {
+      margin: 0 auto;
+      background: var(--paper);
+      color: var(--ink);
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+    }
+
+    .paper-80 {
+      width: 80mm;
+      padding: 4mm;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .paper-58 {
+      width: 58mm;
+      padding: 3mm;
+      font-size: 10.5px;
+      line-height: 1.38;
+    }
+
+    .center { text-align: center; }
+
+    .brand {
+      font-size: 21px;
+      font-weight: 950;
+      letter-spacing: 0.8px;
+      margin: 0;
+    }
+
+    .paper-58 .brand { font-size: 17px; }
+
+    .subtitle {
+      font-size: 12px;
+      font-weight: 850;
+      margin-top: 2px;
+    }
+
+    .paper-58 .subtitle { font-size: 10.5px; }
+
+    .line {
+      border-top: 1px dashed var(--line);
+      margin: 8px 0;
+    }
+
+    .solid-line {
+      border-top: 1px solid var(--line);
+      margin: 8px 0;
+    }
+
+    .section-title {
+      font-weight: 950;
+      font-size: 13px;
+      margin: 8px 0 4px;
+    }
+
+    .paper-58 .section-title { font-size: 11.5px; }
+
+    .row,
+    .money-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+      margin: 2px 0;
+    }
+
+    .label {
+      flex: 0 0 auto;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .value {
+      flex: 1 1 auto;
+      text-align: right;
+      font-weight: 750;
+      word-break: break-word;
+    }
+
+    .money-row b { white-space: nowrap; }
+
+    .warning {
+      font-weight: 900;
+      border: 1px solid var(--line);
+      padding: 5px;
+      margin-top: 6px;
+      text-align: center;
+      word-break: break-word;
+    }
+
+    .info-box,
+    .money-box {
+      border: 1px solid var(--line);
+      padding: 5px;
+      margin-top: 6px;
+      word-break: break-word;
+    }
+
+    .tiny-note {
+      font-size: 9.5px;
+      color: var(--muted);
+      margin-top: 5px;
+      line-height: 1.35;
+    }
+
+    .paper-58 .tiny-note { font-size: 8.5px; }
+
+    .item {
+      margin: 5px 0;
+      padding-bottom: 5px;
+      border-bottom: 1px dotted var(--soft-line);
+    }
+
+    .item-name {
+      font-weight: 850;
+      word-break: break-word;
+    }
+
+    .item-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .item-meta b {
+      color: var(--ink);
+      white-space: nowrap;
+    }
+
+    .total {
+      font-size: 16px;
+      font-weight: 950;
+      padding-top: 6px;
+      margin-top: 6px;
+      border-top: 2px solid var(--line);
+    }
+
+    .paper-58 .total { font-size: 13px; }
+
+    .note {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-weight: 650;
+    }
+
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 10px;
+      margin-top: 8px;
+    }
+
+    .paper-58 .footer { font-size: 9px; }
+
+    @media print {
+      @page {
+        margin: 0;
+        size: auto;
+      }
+
+      html,
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+      }
+
+      .no-print,
+      .hint {
+        display: none !important;
+      }
+
+      .paper {
+        margin: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+      }
+
+      .paper-80 {
+        width: 80mm !important;
+        padding: 4mm !important;
+      }
+
+      .paper-58 {
+        width: 58mm !important;
+        padding: 3mm !important;
+      }
+
+      a {
+        color: #000000 !important;
+        text-decoration: none !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  {% set subtotal = (order.subtotal_twd or 0)|int %}
+  {% set support = (order.store_delivery_support_twd or 0)|int %}
+  {% set customer_share = (order.customer_delivery_share_twd or 0)|int %}
+  {% set extra_fee = (order.extra_fee_twd or 0)|int %}
+  {% set total = (order.total_twd or 0)|int %}
+  {% set store_platform_fee = ((subtotal * 5 + 99) // 100) %}
+  {% set shiper_pay_store = subtotal - support %}
+  {% if shiper_pay_store < 0 %}
+    {% set shiper_pay_store = 0 %}
+  {% endif %}
+  {% set store_net_after_settlement = shiper_pay_store - store_platform_fee %}
+  {% if store_net_after_settlement < 0 %}
+    {% set store_net_after_settlement = 0 %}
+  {% endif %}
+
+  <div class="no-print">
+    <button class="btn" type="button" onclick="window.print()">手動列印</button>
+
+    <a class="btn secondary" href="/store">回店家工作台</a>
+
+    <a class="btn secondary" href="/store/orders#{{ order.order_code }}">
+      回訂單管理
+    </a>
+
+    {% if paper_width == "58" %}
+      <a class="btn secondary" href="/store/orders/{{ order.order_code }}/print?auto=0&paper=80">
+        切換 80mm
+      </a>
+    {% else %}
+      <a class="btn secondary" href="/store/orders/{{ order.order_code }}/print?auto=0&paper=58">
+        切換 58mm
+      </a>
+    {% endif %}
+  </div>
+
+  <div class="hint no-print">
+    此頁使用瀏覽器列印。實際能否列印，取決於店家裝置 / POS / 瀏覽器是否已連接並支援該印表機。
+  </div>
+
+  <main class="paper paper-{{ paper_width }}">
+    <header class="center">
+      <h1 class="brand">FUMAP GO</h1>
+      <div class="subtitle">店家訂單 / Store Receipt</div>
+    </header>
+
+    <div class="solid-line"></div>
+
+    <section>
+      <div class="section-title">店家</div>
+
+      <div class="row">
+        <span class="label">店家名稱</span>
+        <span class="value">{{ order.store_name or store.store_name or '-' }}</span>
+      </div>
+
+      <div class="row">
+        <span class="label">店碼</span>
+        <span class="value">{{ order.store_code or store.store_code or '-' }}</span>
+      </div>
+
+      {% if order.store_phone or store.phone %}
+      <div class="row">
+        <span class="label">店家電話</span>
+        <span class="value">{{ order.store_phone or store.phone }}</span>
+      </div>
+      {% endif %}
+    </section>
+
+    <div class="line"></div>
+
+    <section>
+      <div class="section-title">訂單</div>
+
+      <div class="row">
+        <span class="label">訂單編號</span>
+        <span class="value">{{ order.order_code }}</span>
+      </div>
+
+      <div class="row">
+        <span class="label">下單時間</span>
+        <span class="value">{{ order.created_at or '-' }}</span>
+      </div>
+
+      <div class="row">
+        <span class="label">付款方式</span>
+        <span class="value">{{ order.payment_method or '-' }}</span>
+      </div>
+
+      <div class="row">
+        <span class="label">付款狀態</span>
+        <span class="value">{{ order.payment_status or '-' }}</span>
+      </div>
+    </section>
+
+    {% if order.admin_hold %}
+      <div class="warning">
+        Admin 暫停：{{ order.admin_hold_reason or '需人工確認' }}
+      </div>
+    {% endif %}
+
+    <div class="line"></div>
+
+    <section>
+      <div class="section-title">客戶 / 配送</div>
+
+      <div class="row">
+        <span class="label">客戶姓名</span>
+        <span class="value">{{ order.customer_name or '-' }}</span>
+      </div>
+
+      <div class="row">
+        <span class="label">客戶電話</span>
+        <span class="value">{{ order.customer_phone or '-' }}</span>
+      </div>
+
+      <div class="row">
+        <span class="label">配送地址</span>
+        <span class="value">{{ order.delivery_address or '-' }}</span>
+      </div>
+
+      {% if order.floor_number %}
+      <div class="row">
+        <span class="label">樓層</span>
+        <span class="value">{{ order.floor_number }}</span>
+      </div>
+      {% endif %}
+
+      {% if order.address_note %}
+      <div class="row">
+        <span class="label">地址備註</span>
+        <span class="value">{{ order.address_note }}</span>
+      </div>
+      {% endif %}
+
+      {% if order.note %}
+      <div class="row">
+        <span class="label">其他備註</span>
+        <span class="value">{{ order.note }}</span>
+      </div>
+      {% endif %}
+    </section>
+
+    {% if order.invoice_required %}
+      <div class="line"></div>
+
+      <section>
+        <div class="section-title">收據 / 發票資料</div>
+
+        <div class="info-box">
+          <div class="row">
+            <span class="label">類型</span>
+            <span class="value">
+              {% if order.invoice_type == 'RECEIPT' %}
+                收據
+              {% elif order.invoice_type == 'COMPANY_INVOICE' %}
+                公司發票資料
+              {% else %}
+                -
+              {% endif %}
+            </span>
+          </div>
+
+          {% if order.invoice_title %}
+          <div class="row">
+            <span class="label">抬頭</span>
+            <span class="value">{{ order.invoice_title }}</span>
+          </div>
+          {% endif %}
+
+          {% if order.invoice_tax_id %}
+          <div class="row">
+            <span class="label">統一編號</span>
+            <span class="value">{{ order.invoice_tax_id }}</span>
+          </div>
+          {% endif %}
+
+          {% if order.invoice_note %}
+          <div class="section-title" style="margin-top:5px;">備註</div>
+          <div class="note">{{ order.invoice_note }}</div>
+          {% endif %}
+
+          <div class="tiny-note">此資訊僅供店家參考，FUMAP GO V1 不自動開立統一發票。</div>
+        </div>
+      </section>
+    {% endif %}
+
+    <div class="line"></div>
+
+    <section>
+      <div class="section-title">商品明細</div>
+
+      {% if items %}
+        {% for i in items %}
+          <div class="item">
+            <div class="item-name">{{ i.product_name }}</div>
+            <div class="item-meta">
+              <span>{{ i.unit_price_twd|twd }} x {{ i.qty }}</span>
+              <b>{{ i.line_total_twd|twd }}</b>
+            </div>
+          </div>
+        {% endfor %}
+      {% elif order.manual_order_title %}
+        <div class="item">
+          <div class="item-name">{{ order.manual_order_title }}</div>
+          <div class="item-meta">
+            <span>店家配送單</span>
+            <b>{{ order.subtotal_twd|twd }}</b>
+          </div>
+        </div>
+      {% else %}
+        <p>沒有商品明細</p>
+      {% endif %}
+    </section>
+
+    <div class="line"></div>
+
+    <section>
+      <div class="section-title">客戶應付</div>
+
+      <div class="money-row">
+        <span>商品小計</span>
+        <b>{{ subtotal|twd }}</b>
+      </div>
+
+      <div class="money-row">
+        <span>客戶配送分攤</span>
+        <b>{{ customer_share|twd }}</b>
+      </div>
+
+      <div class="money-row">
+        <span>困難 / 雨天加價</span>
+        <b>{{ extra_fee|twd }}</b>
+      </div>
+
+      <div class="money-row total">
+        <span>客戶應付總額</span>
+        <b>{{ total|twd }}</b>
+      </div>
+    </section>
+
+    <div class="line"></div>
+
+    <section>
+      <div class="section-title">店家金流</div>
+
+      <div class="money-box">
+        <div class="money-row">
+          <span>Shiper 到店付款</span>
+          <b>{{ shiper_pay_store|twd }}</b>
+        </div>
+
+        <div class="money-row">
+          <span>店家平台費 5%</span>
+          <b>{{ store_platform_fee|twd }}</b>
+        </div>
+
+        <div class="money-row total">
+          <span>店家結算後實收</span>
+          <b>{{ store_net_after_settlement|twd }}</b>
+        </div>
+
+        <div class="tiny-note">平台費另行結算</div>
+      </div>
+    </section>
+
+    {% if order.extra_fee_reason %}
+      <div class="line"></div>
+      <section>
+        <div class="section-title">加價原因</div>
+        <div class="note">{{ order.extra_fee_reason }}</div>
+      </section>
+    {% endif %}
+
+    {% if order.manual_order_title %}
+      <div class="line"></div>
+      <section>
+        <div class="section-title">店家配送單</div>
+        <div class="note">{{ order.manual_order_title }}</div>
+      </section>
+    {% endif %}
+
+    {% if order.driver_name or order.driver_code or order.driver_phone %}
+      <div class="line"></div>
+      <section>
+        <div class="section-title">Shiper</div>
+
+        <div class="row">
+          <span class="label">姓名 / 編號</span>
+          <span class="value">{{ order.driver_name or order.driver_code or '-' }}</span>
+        </div>
+
+        {% if order.driver_phone %}
+        <div class="row">
+          <span class="label">電話</span>
+          <span class="value">{{ order.driver_phone }}</span>
+        </div>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    <div class="solid-line"></div>
+
+    <footer class="footer">
+      <div>請保留此單據供對帳使用</div>
+      <div>列印時間：{{ printed_at }}</div>
+      <div>FUMAP GO｜fumapgo.com</div>
+    </footer>
+  </main>
+
+  {% if auto_print %}
+  <script>
+    window.addEventListener("load", function () {
+      setTimeout(function () {
+        window.print();
+      }, 300);
+    });
+  </script>
+  {% endif %}
+</body>
+</html>

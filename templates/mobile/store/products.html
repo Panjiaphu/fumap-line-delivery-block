@@ -1,0 +1,202 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}商品管理｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}新增商品、圖片、庫存、準備時間{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h2>商品管理</h2>
+  <p>新增商品圖片、價格、庫存、準備時間與商品介紹。上傳圖片會自動壓縮成 WEBP，讓客戶看店頁更快。</p>
+</section>
+
+<section class="card">
+  <h2>新增商品</h2>
+
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="action" value="add">
+
+    <div class="form-group">
+      <label>商品名稱</label>
+      <input name="name" required placeholder="例如：叉燒飯">
+    </div>
+
+    <div class="grid-2">
+      <div class="form-group">
+        <label>價格 TWD</label>
+        <input name="price_twd" type="number" min="1" required placeholder="120">
+      </div>
+
+      <div class="form-group">
+        <label>庫存數量</label>
+        <input name="stock_qty" type="number" min="0" value="999" placeholder="999">
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="form-group">
+        <label>準備時間 / 分鐘</label>
+        <input name="prepare_minutes" type="number" min="0" value="15" placeholder="15">
+      </div>
+
+      <div class="form-group">
+        <label>商品分類</label>
+        <input name="product_category" value="主餐" placeholder="主餐 / 飲料 / 加點">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>商品介紹</label>
+      <textarea name="description" placeholder="商品特色、份量、口味、適合誰點..."></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>商品備註</label>
+      <textarea name="product_note" placeholder="例如：辣度可調、售完為止、需提前準備..."></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>上傳商品圖片</label>
+      <input type="file" name="image_file" accept="image/*">
+      <p class="muted">
+        建議使用正方形圖片。系統會自動壓縮成 WEBP，最大約 800 x 800。
+        若同時上傳圖片與填寫圖片 URL，系統會優先使用上傳圖片。
+      </p>
+    </div>
+
+    <div class="form-group">
+      <label>商品圖片 URL</label>
+      <input name="image_url" placeholder="https://... 或 /uploads/products/xxx.webp">
+      <p class="muted">可貼外部圖片 URL；若上方有上傳圖片，系統會自動使用上傳圖片。</p>
+    </div>
+
+    <div class="form-group">
+      <label>狀態</label>
+      <select name="is_active">
+        <option value="1">上架</option>
+        <option value="0">下架</option>
+      </select>
+    </div>
+
+    <button class="btn" type="submit">新增商品</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="section-title" style="margin-top:0;">
+    <h2>商品列表</h2>
+    <span class="badge">{{ products|length }} 件</span>
+  </div>
+
+  {% for p in products %}
+  <section class="product-edit-card">
+    <form method="post" enctype="multipart/form-data">
+      <input type="hidden" name="product_id" value="{{ p.id }}">
+
+      <div class="product-edit-head">
+        {% if p.image_url %}
+          <img class="product-edit-image" src="{{ p.image_url }}" alt="{{ p.name }}">
+        {% else %}
+          <div class="product-edit-image product-placeholder">
+            <span>FGO</span>
+          </div>
+        {% endif %}
+
+        <div>
+          <h3>{{ p.name }}</h3>
+          <p class="muted">
+            {{ p.price_twd|twd }}｜
+            {{ p.product_category or '主餐' }}｜
+            {% if p.is_active %}上架中{% else %}已下架{% endif %}
+          </p>
+
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <span class="badge">庫存 {{ p.stock_qty if p.stock_qty is not none else 999 }}</span>
+            <span class="badge">準備 {{ p.prepare_minutes if p.prepare_minutes is not none else 15 }} 分</span>
+            {% if p.is_active %}
+              <span class="badge ok">可下單</span>
+            {% else %}
+              <span class="badge warn">不可下單</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>商品名稱</label>
+        <input name="name" value="{{ p.name }}" required>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label>價格 TWD</label>
+          <input name="price_twd" type="number" min="1" value="{{ p.price_twd }}" required>
+        </div>
+
+        <div class="form-group">
+          <label>庫存數量</label>
+          <input name="stock_qty" type="number" min="0" value="{{ p.stock_qty if p.stock_qty is not none else 999 }}">
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label>準備時間 / 分鐘</label>
+          <input name="prepare_minutes" type="number" min="0" value="{{ p.prepare_minutes if p.prepare_minutes is not none else 15 }}">
+        </div>
+
+        <div class="form-group">
+          <label>商品分類</label>
+          <input name="product_category" value="{{ p.product_category or '主餐' }}">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>商品介紹</label>
+        <textarea name="description">{{ p.description or '' }}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label>商品備註</label>
+        <textarea name="product_note">{{ p.product_note or '' }}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label>重新上傳商品圖片</label>
+        <input type="file" name="image_file" accept="image/*">
+        <p class="muted">選擇新圖片後才會覆蓋；未選圖片則保留目前圖片或下方圖片 URL。</p>
+      </div>
+
+      <div class="form-group">
+        <label>商品圖片 URL</label>
+        <input name="image_url" value="{{ p.image_url or '' }}" placeholder="https://... 或 /uploads/products/xxx.webp">
+      </div>
+
+      <div class="form-group">
+        <label>狀態</label>
+        <select name="is_active">
+          <option value="1" {% if p.is_active %}selected{% endif %}>上架</option>
+          <option value="0" {% if not p.is_active %}selected{% endif %}>下架</option>
+        </select>
+      </div>
+
+      <div class="grid-2">
+        <button class="btn" name="action" value="update">儲存商品</button>
+        <button class="btn secondary" name="action" value="toggle" formnovalidate>
+          {% if p.is_active %}快速下架{% else %}快速上架{% endif %}
+        </button>
+      </div>
+    </form>
+  </section>
+  {% else %}
+    <section class="empty">
+      <h3>尚未新增商品</h3>
+      <p>先新增一個商品，客戶才能在看店頁下單。</p>
+    </section>
+  {% endfor %}
+</section>
+
+<section class="grid-2">
+  <a class="btn secondary" href="/store">回店家工作台</a>
+  <a class="btn" href="/show/store/{{ store.store_code }}">預覽店家頁</a>
+</section>
+{% endblock %}

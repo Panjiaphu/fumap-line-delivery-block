@@ -1,0 +1,66 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}Shiper 合約｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}Shiper 合作條款與簽署紀錄{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h2>Shiper 合約 / 文件</h2>
+  <p>合約簽署後只可查看，不能刪除。若需修改，需由 Admin 建立新版本。</p>
+</section>
+
+<section class="card">
+  <h2>{{ driver.driver_name }}</h2>
+  <p class="muted">
+    Shiper 代碼：{{ driver.driver_code }}<br>
+    狀態：
+    {% if driver.contract_signed_at %}
+      <span class="badge ok">已簽署</span>
+    {% else %}
+      <span class="badge warn">未簽署</span>
+    {% endif %}
+  </p>
+
+  {% if driver.contract_signed_at %}
+    <p>
+      簽署時間：<b>{{ driver.contract_signed_at }}</b><br>
+      合約 Hash：<span class="muted">{{ driver.contract_hash }}</span>
+    </p>
+  {% endif %}
+</section>
+
+<section class="contract-box">
+  <h2>Shiper 合作條款 Commercial V1</h2>
+
+  {% for term in contract_terms %}
+    <p><b>{{ loop.index }}.</b> {{ term }}</p>
+  {% endfor %}
+</section>
+
+{% if driver.contract_signed_at %}
+<section class="card">
+  <h2>已簽署</h2>
+  <p class="muted">
+    此合約已建立 BlockFGO 紀錄。系統不提供刪除或修改按鈕。
+  </p>
+  <a class="btn secondary" href="/admin/blocks">查看 BlockFGO</a>
+</section>
+{% else %}
+<section class="card">
+  <h2>簽署確認</h2>
+
+  <form method="post">
+    <label class="check-row">
+      <input type="checkbox" name="agree" value="1">
+      <span>我已閱讀並同意以上 Shiper 合作條款。</span>
+    </label>
+
+    <button class="btn" type="submit">簽署 Shiper 合約</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="card">
+  <a class="btn secondary" href="/driver">回 Shiper 工作台</a>
+</section>
+{% endblock %}

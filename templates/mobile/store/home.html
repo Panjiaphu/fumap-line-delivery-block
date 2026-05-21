@@ -1,0 +1,716 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}店家工作台｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}快速接單、製作、呼叫 Shiper{% endblock %}
+
+{% block content %}
+
+{% macro twd0(value) %}
+  {{ (value or 0)|twd }}
+{% endmacro %}
+
+{% macro tel_link(phone) %}
+  {% if phone %}
+    <a href="tel:{{ phone }}">{{ phone }}</a>
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+{% macro invoice_type_label(o) %}
+  {% if o.invoice_type == 'RECEIPT' %}
+    收據
+  {% elif o.invoice_type == 'COMPANY_INVOICE' %}
+    公司發票資料
+  {% else %}
+    -
+  {% endif %}
+{% endmacro %}
+
+{% macro invoice_request_box(o) %}
+  {% if o.invoice_required %}
+    <section
+      class="invoice-note-box"
+      style="background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:10px;margin:10px 0;"
+    >
+      <b style="display:block;margin-bottom:6px;color:#9a3412;">收據 / 發票需求</b>
+
+      <p class="muted" style="margin:0;line-height:1.75;color:#7c2d12;">
+        類型：<b>{{ invoice_type_label(o) }}</b><br>
+
+        {% if o.invoice_title %}
+          抬頭：<b>{{ o.invoice_title }}</b><br>
+        {% endif %}
+
+        {% if o.invoice_tax_id %}
+          統一編號：<b>{{ o.invoice_tax_id }}</b><br>
+        {% endif %}
+
+        {% if o.invoice_note %}
+          備註：{{ o.invoice_note }}<br>
+        {% endif %}
+      </p>
+
+      <small class="muted" style="display:block;margin-top:6px;line-height:1.55;">
+        此資訊僅供店家開立收據 / 發票參考，FUMAP GO V1 不自動開立統一發票。
+      </small>
+    </section>
+  {% endif %}
+{% endmacro %}
+
+{% macro store_money_box(o) %}
+  {% set subtotal = (o.subtotal_twd or 0)|int %}
+  {% set support = (o.store_delivery_support_twd or 0)|int %}
+  {% set customer_share = (o.customer_delivery_share_twd or 0)|int %}
+  {% set delivery_fee = (o.delivery_fee_twd or 0)|int %}
+  {% set extra_fee = (o.extra_fee_twd or 0)|int %}
+  {% set total = (o.total_twd or 0)|int %}
+  {% set platform_fee = ((subtotal * 5 + 99) // 100) %}
+  {% set shiper_pay_store = subtotal - support %}
+  {% if shiper_pay_store < 0 %}
+    {% set shiper_pay_store = 0 %}
+  {% endif %}
+  {% set store_net = shiper_pay_store - platform_fee %}
+  {% if store_net < 0 %}
+    {% set store_net = 0 %}
+  {% endif %}
+
+  <section class="card" style="background:#f8fafc;border-color:#cbd5e1;margin-top:10px;">
+    <h3>店家金流 / COD V2</h3>
+
+    <div class="grid-2">
+      <div>
+        <span class="muted">商品金額</span>
+        <h3>{{ subtotal|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">店家支援配送</span>
+        <h3>{{ support|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">Shiper 到店付款</span>
+        <h3>{{ shiper_pay_store|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">店家平台費 5%</span>
+        <h3>{{ platform_fee|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">店家結算後實收</span>
+        <h3>{{ store_net|twd }}</h3>
+      </div>
+
+      <div>
+        <span class="muted">客戶總付</span>
+        <h3>{{ total|twd }}</h3>
+      </div>
+    </div>
+
+    <p class="muted" style="line-height:1.75;">
+      客戶配送分攤：{{ customer_share|twd }}｜
+      配送總費用：{{ delivery_fee|twd }}｜
+      困難 / 雨天加價：{{ extra_fee|twd }}<br>
+      店家平台費由店家與 Admin 另行結算，Shiper 不代收。
+    </p>
+  </section>
+{% endmacro %}
+
+{% macro section_summary(title, count) %}
+  <summary style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;">
+    <span>
+      <b>{{ title }}</b>
+      <small class="muted">{{ count }} 筆</small>
+    </span>
+    <span class="badge">＋ / －</span>
+  </summary>
+{% endmacro %}
+
+{% macro smartroad_badges(o) %}
+  {% if o.smartroad_lane == 'GREEN' %}
+    <span class="badge ok">SmartRoad 綠色</span>
+  {% elif o.smartroad_lane == 'RED' %}
+    <span class="badge danger">SmartRoad 紅色</span>
+  {% elif o.smartroad_lane == 'YELLOW' %}
+    <span class="badge warn">SmartRoad 黃色</span>
+  {% elif o.smartroad_lane %}
+    <span class="badge">SmartRoad {{ o.smartroad_lane }}</span>
+  {% endif %}
+
+  {% if o.smartroad_score is not none %}
+    <span class="badge">分數 {{ o.smartroad_score }}</span>
+  {% endif %}
+
+  {% if o.smartroad_same_road %}
+    <span class="badge ok">同路</span>
+  {% endif %}
+
+  {% if o.smartroad_same_side %}
+    <span class="badge ok">同側</span>
+  {% endif %}
+
+  {% if o.smartroad_uturn_risk %}
+    <span class="badge warn">可能迴轉</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro order_badges(o) %}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 10px;">
+    <span class="badge">{{ o.status or '-' }}</span>
+    <span class="badge">{{ o.payment_method or '-' }}</span>
+    <span class="badge">{{ o.payment_status or '-' }}</span>
+    <span class="badge">{{ o.delivery_method or '-' }}</span>
+
+    {% if o.order_source == 'STORE_MANUAL' %}
+      <span class="badge ok">店家配送單</span>
+    {% endif %}
+
+    {% if o.admin_hold %}
+      <span class="badge danger">Admin 暫停</span>
+    {% endif %}
+
+    {% if o.invoice_required %}
+      <span class="badge warn">收據 / 發票</span>
+    {% endif %}
+
+    {% if o.distance_band %}
+      <span class="badge">{{ o.distance_band }}</span>
+    {% endif %}
+
+    {{ smartroad_badges(o) }}
+
+    {% if o.extra_fee_twd %}
+      <span class="badge warn">+{{ o.extra_fee_twd }} 困難</span>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% macro order_items_brief(o) %}
+  {% set order_items = o["items"]|default([]) %}
+
+  {% if order_items %}
+    <div class="muted">
+      {% for i in order_items[:3] %}
+        {{ i.product_name }} x {{ i.qty }}{% if not loop.last %}｜{% endif %}
+      {% endfor %}
+      {% if order_items|length > 3 %}
+        ｜共 {{ order_items|length }} 項
+      {% endif %}
+    </div>
+  {% elif o.manual_order_title %}
+    <div class="muted">{{ o.manual_order_title }}</div>
+  {% else %}
+    <div class="muted">沒有商品明細</div>
+  {% endif %}
+{% endmacro %}
+
+{% macro print_order_button(o) %}
+  <a
+    class="btn secondary"
+    target="_blank"
+    href="/store/orders/{{ o.order_code }}/print?auto=1&paper=80"
+  >
+    列印
+  </a>
+{% endmacro %}
+
+{% macro order_card_base(o) %}
+  <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">{{ o.order_code }}</h3>
+      <p class="muted" style="margin:4px 0 0;">
+        {{ o.created_at or '-' }}
+      </p>
+    </div>
+
+    <div style="text-align:right;">
+      <b style="font-size:20px;">{{ o.total_twd|twd }}</b><br>
+      <span class="muted">客戶總付</span>
+    </div>
+  </div>
+
+  {{ order_badges(o) }}
+
+  <section class="card" style="background:#f8fafc;border-color:#e2e8f0;margin-top:10px;">
+    <p class="muted" style="margin:0;line-height:1.7;">
+      客戶：<b>{{ o.customer_name or '-' }}</b>｜
+      {{ tel_link(o.customer_phone) }}<br>
+      地址：{{ o.delivery_address or '-' }} {{ o.floor_number or '' }}<br>
+      地址備註：{{ o.address_note or '-' }}<br>
+      其他備註：{{ o.note or '-' }}
+    </p>
+
+    {{ invoice_request_box(o) }}
+  </section>
+
+  <div style="margin-top:10px;">
+    {{ order_items_brief(o) }}
+  </div>
+
+  <p class="muted" style="margin-top:8px;line-height:1.7;">
+    商品：<b>{{ o.subtotal_twd|twd }}</b>｜
+    配送總費用：{{ o.delivery_fee_twd|twd }}｜
+    店家支援配送：{{ o.store_delivery_support_twd|twd }}｜
+    困難：{{ o.extra_fee_twd|twd }}
+    {% if o.extra_fee_reason %}
+      <br>加價原因：{{ o.extra_fee_reason }}
+    {% endif %}
+  </p>
+
+  {{ store_money_box(o) }}
+{% endmacro %}
+
+{% macro new_order_card(o) %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;border-color:#86efac;background:#f0fdf4;">
+    {{ order_card_base(o) }}
+
+    <form method="post" action="/store/orders/{{ o.order_code }}/action" style="margin-top:12px;">
+      <button
+        class="btn"
+        name="action"
+        value="accept"
+        style="width:100%;min-height:64px;font-size:22px;font-weight:950;border-radius:18px;background:#16a34a;color:#fff;"
+      >
+        接單
+      </button>
+
+      <div class="grid-2" style="margin-top:10px;">
+        <a class="btn secondary" href="/store/orders#{{ o.order_code }}">查看詳情</a>
+        {{ print_order_button(o) }}
+      </div>
+    </form>
+
+    <details style="margin-top:10px;">
+      <summary class="muted" style="font-weight:800;">其他操作 / 危險操作</summary>
+      <p class="muted" style="color:#b45309;font-weight:700;margin-top:8px;">
+        只有確定無法出單時才取消。取消後會留下 BlockFGO 紀錄。
+      </p>
+
+      <form method="post" action="/store/orders/{{ o.order_code }}/action" style="margin-top:10px;">
+        <div class="form-group">
+          <label>取消原因</label>
+          <input name="reason" value="店家取消新訂單" placeholder="請輸入取消原因">
+        </div>
+        <button class="btn danger" name="action" value="cancel">
+          取消訂單
+        </button>
+      </form>
+    </details>
+  </section>
+{% endmacro %}
+
+{% macro accepted_order_card(o) %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;border-color:#bfdbfe;background:#eff6ff;">
+    {{ order_card_base(o) }}
+
+    <p class="muted" style="color:#0369a1;font-weight:900;">
+      商品完成後，按下「完成商品 / 呼叫 Shiper」。
+    </p>
+
+    <form method="post" action="/store/orders/{{ o.order_code }}/action" style="margin-top:12px;">
+      <button
+        class="btn"
+        name="action"
+        value="call_driver"
+        style="width:100%;min-height:60px;font-size:20px;font-weight:950;border-radius:18px;"
+      >
+        完成商品 / 呼叫 Shiper
+      </button>
+
+      <div class="grid-2" style="margin-top:10px;">
+        <a class="btn secondary" href="/store/orders#{{ o.order_code }}">查看詳情</a>
+        {{ print_order_button(o) }}
+      </div>
+    </form>
+
+    <details style="margin-top:10px;">
+      <summary class="muted" style="font-weight:800;">其他操作 / 危險操作</summary>
+      <p class="muted" style="color:#b45309;font-weight:700;">
+        若商品尚未製作且確定無法出單，才取消訂單。
+      </p>
+
+      <form method="post" action="/store/orders/{{ o.order_code }}/action">
+        <div class="form-group">
+          <label>取消原因</label>
+          <input name="reason" value="店家取消製作中訂單" placeholder="請輸入取消原因">
+        </div>
+        <button class="btn danger" name="action" value="cancel">
+          取消訂單
+        </button>
+      </form>
+    </details>
+  </section>
+{% endmacro %}
+
+<section class="hero">
+  <h2>店家工作台</h2>
+  <p>
+    新訂單先接單，製作完成後呼叫 Shiper。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <span class="badge">{{ store.store_code }}</span>
+    <span class="badge ok">{{ store.store_name }}</span>
+
+    <span class="badge {% if store.is_open %}ok{% else %}warn{% endif %}">
+      {% if store.is_open %}營業中{% else %}休息中{% endif %}
+    </span>
+
+    {% if store.is_temporarily_closed %}
+      <span class="badge warn">今日暫停接單</span>
+    {% endif %}
+
+    <span class="badge {% if store.setup_completed %}ok{% else %}warn{% endif %}">
+      {% if store.setup_completed %}已設定{% else %}未完成設定{% endif %}
+    </span>
+
+    <span class="badge">{{ store.area_label or '中壢區' }}</span>
+    <span class="badge">{{ store.city_block or 'ZHONGLI' }}</span>
+  </div>
+</section>
+
+<section
+  class="card"
+  style="{% if store.is_temporarily_closed or not store.is_open %}border-color:#fed7aa;background:#fff7ed;{% else %}border-color:#86efac;background:#f0fdf4;{% endif %}"
+>
+  <h2>店家狀態</h2>
+
+  <p class="muted" style="line-height:1.7;">
+    營業狀態：
+    {% if store.is_open %}
+      <b style="color:#166534;">營業中</b>
+    {% else %}
+      <b style="color:#b45309;">休息中</b>
+    {% endif %}
+    <br>
+
+    今日狀態：
+    {% if store.is_temporarily_closed %}
+      <b style="color:#b45309;">{{ store.temporary_close_reason or '暫停接單' }}</b>
+    {% else %}
+      正常接單
+    {% endif %}
+    <br>
+
+    營業時間：{{ store.open_time or '10:00' }} - {{ store.close_time or '21:00' }}
+  </p>
+
+  <div class="grid-2">
+    <div>
+      <span class="muted">新訂單</span>
+      <h3>{{ new_orders|length }}</h3>
+    </div>
+    <div>
+      <span class="muted">製作中</span>
+      <h3>{{ accepted_orders|length }}</h3>
+    </div>
+  </div>
+</section>
+
+<section class="card" style="border-color:#99f6e4;background:#f0fdfa;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <div>
+      <h2>接單板</h2>
+      <p class="muted">
+        這裡只放需要店家立即處理的訂單。取消訂單會收合在危險操作內，避免誤按。
+      </p>
+    </div>
+    <a class="btn secondary" href="/store/orders">訂單管理</a>
+  </div>
+</section>
+
+<details class="card" {% if new_orders|length > 0 %}open{% endif %}>
+  {{ section_summary("新訂單", new_orders|length) }}
+
+  {% for o in new_orders %}
+    {{ new_order_card(o) }}
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有新訂單</h3>
+      <p>有新訂單時，Ringbell 會提醒並可一鍵跳到此區。</p>
+    </section>
+  {% endfor %}
+</details>
+
+<details class="card" {% if accepted_orders|length > 0 %}open{% endif %}>
+  {{ section_summary("製作中", accepted_orders|length) }}
+
+  {% for o in accepted_orders %}
+    {{ accepted_order_card(o) }}
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有製作中訂單</h3>
+      <p>接單後，訂單會移到這裡。</p>
+    </section>
+  {% endfor %}
+</details>
+
+<details class="card" {% if waiting_driver_orders|length > 0 %}open{% endif %}>
+  {{ section_summary("等待 Shiper / 等待取貨", waiting_driver_orders|length) }}
+
+  {% for o in waiting_driver_orders %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;">
+    {{ order_card_base(o) }}
+
+    {% if o.status == 'WAITING_DRIVER' %}
+      <section class="card" style="background:#f8fafc;border-color:#e2e8f0;">
+        <b>等待 Shiper 接單</b>
+        <p class="muted" style="line-height:1.65;">
+          商品已完成，系統正在等待同區域 Shiper 接單。
+        </p>
+      </section>
+    {% elif o.status == 'DRIVER_ACCEPTED' %}
+      <section class="card" style="background:#eff6ff;border-color:#bfdbfe;">
+        <b>Shiper 已接單，等待到店取貨</b>
+        <p class="muted" style="line-height:1.65;">
+          Shiper：{{ o.driver_name or o.driver_code or '-' }}<br>
+          電話：{{ tel_link(o.driver_phone) }}
+        </p>
+      </section>
+    {% endif %}
+
+    <div class="grid-2">
+      <a class="btn secondary" href="/store/orders#{{ o.order_code }}">查看詳情</a>
+      {{ print_order_button(o) }}
+    </div>
+  </section>
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有等待 Shiper 的訂單</h3>
+    </section>
+  {% endfor %}
+</details>
+
+<section class="card" style="border-color:#bfdbfe;background:#eff6ff;">
+  <h2>追蹤板</h2>
+  <p class="muted">
+    Shiper 已取貨後，店家只需追蹤狀態，不需要再操作。
+  </p>
+</section>
+
+<details class="card" {% if active_delivery_orders|length > 0 %}open{% endif %}>
+  {{ section_summary("配送中", active_delivery_orders|length) }}
+
+  {% for o in active_delivery_orders %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;">
+    {{ order_card_base(o) }}
+
+    <section class="card" style="background:#f0fdf4;border-color:#bbf7d0;">
+      <b>Shiper 已取貨，配送中</b>
+      <p class="muted" style="line-height:1.65;">
+        Shiper：{{ o.driver_name or o.driver_code or '-' }}<br>
+        電話：{{ tel_link(o.driver_phone) }}
+      </p>
+    </section>
+
+    <div class="grid-2">
+      <a class="btn secondary" href="/store/orders#{{ o.order_code }}">查看詳情</a>
+      {{ print_order_button(o) }}
+    </div>
+  </section>
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有配送中訂單</h3>
+    </section>
+  {% endfor %}
+</details>
+
+<details class="card" {% if completed_orders|length > 0 and not new_orders and not accepted_orders and not waiting_driver_orders and not active_delivery_orders %}open{% endif %}>
+  {{ section_summary("完成板", completed_orders|length) }}
+
+  {% for o in completed_orders %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;background:#f8fafc;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div>
+        <span class="badge ok">完成</span>
+        <h3 style="margin:6px 0 0;">{{ o.order_code }}</h3>
+        <p class="muted">{{ o.updated_at or o.created_at or '-' }}</p>
+      </div>
+      <b>{{ o.total_twd|twd }}</b>
+    </div>
+
+    <p class="muted" style="line-height:1.65;">
+      客戶：{{ o.customer_name or '-' }}｜{{ tel_link(o.customer_phone) }}<br>
+      付款：{{ o.payment_method or '-' }} / {{ o.payment_status or '-' }}
+    </p>
+
+    {{ invoice_request_box(o) }}
+    {{ store_money_box(o) }}
+
+    <div class="grid-2">
+      <a class="btn" href="/store/accounting">查看對帳</a>
+      <a class="btn secondary" href="/store/orders#{{ o.order_code }}">查看詳情</a>
+      {{ print_order_button(o) }}
+    </div>
+  </section>
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有完成訂單</h3>
+    </section>
+  {% endfor %}
+</details>
+
+<details class="card" {% if issue_orders|length > 0 %}open{% endif %}>
+  {{ section_summary("異常 / 暫停", issue_orders|length) }}
+
+  {% for o in issue_orders %}
+  <section id="{{ o.order_code }}" class="card" style="margin-top:12px;background:#fff7ed;border-color:#fed7aa;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div>
+        <span class="badge warn">需人工確認</span>
+        <h3 style="margin:6px 0 0;">{{ o.order_code }}</h3>
+        <p class="muted">{{ o.updated_at or o.created_at or '-' }}</p>
+      </div>
+      <span class="badge warn">{{ o.status }}</span>
+    </div>
+
+    {{ order_badges(o) }}
+
+    <p class="muted" style="line-height:1.65;">
+      客戶：{{ o.customer_name or '-' }}｜{{ tel_link(o.customer_phone) }}<br>
+      地址：{{ o.delivery_address or '-' }} {{ o.floor_number or '' }}<br>
+      {% if o.admin_hold %}
+        Admin 暫停原因：{{ o.admin_hold_reason or '付款或訂單資料需確認' }}<br>
+      {% endif %}
+      {% if o.extra_fee_reason %}
+        加價 / 困難原因：{{ o.extra_fee_reason }}<br>
+      {% endif %}
+    </p>
+
+    {{ invoice_request_box(o) }}
+    {{ store_money_box(o) }}
+
+    <p class="muted" style="color:#b45309;font-weight:800;">
+      此單需人工確認，請不要混入新訂單或製作中流程。
+    </p>
+
+    <div class="grid-2">
+      <a class="btn secondary" href="/store/orders#{{ o.order_code }}">查看詳情</a>
+      {{ print_order_button(o) }}
+    </div>
+  </section>
+  {% else %}
+    <section class="empty" style="margin-top:12px;">
+      <h3>目前沒有異常 / 暫停訂單</h3>
+    </section>
+  {% endfor %}
+</details>
+
+<section class="card store-manual-cta">
+  <h2>店家配送單</h2>
+  <p>
+    客戶直接向店家下單，但店家不方便配送時，可建立配送單呼叫 Shiper。
+    COD 訂單由 Shiper 到店支付「商品金額 - 店家支援配送」給店家，再向客戶收款。
+  </p>
+  <a class="btn" href="/store/orders/new">建立配送單 / 呼叫 Shiper</a>
+</section>
+
+<details class="card">
+  <summary style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;">
+    <span>
+      <b>今日概況</b>
+      <small class="muted">營運摘要</small>
+    </span>
+    <span class="badge">＋ / －</span>
+  </summary>
+
+  <div class="grid-2" style="margin-top:12px;">
+    <div>
+      <span class="muted">新訂單</span>
+      <h3>{{ new_orders|length }}</h3>
+    </div>
+    <div>
+      <span class="muted">製作中</span>
+      <h3>{{ accepted_orders|length }}</h3>
+    </div>
+    <div>
+      <span class="muted">等待 Shiper</span>
+      <h3>{{ waiting_driver_orders|length }}</h3>
+    </div>
+    <div>
+      <span class="muted">配送中</span>
+      <h3>{{ active_delivery_orders|length }}</h3>
+    </div>
+    <div>
+      <span class="muted">完成</span>
+      <h3>{{ completed_orders|length }}</h3>
+    </div>
+    <div>
+      <span class="muted">異常 / 暫停</span>
+      <h3>{{ issue_orders|length }}</h3>
+    </div>
+  </div>
+</details>
+
+<details class="card app-details-menu">
+  <summary>
+    <span>店家功能選單</span>
+    <small>點擊展開 / 收合</small>
+  </summary>
+
+  <p class="muted" style="margin-top:10px;">
+    接單與製作保留在首頁主要區域，完整功能集中在此選單。
+  </p>
+
+  <div class="menu-grid">
+    <a href="/store">
+      <b>店家工作台</b>
+      <span>快速接單、製作、呼叫 Shiper</span>
+    </a>
+
+    <a href="/store/orders/new">
+      <b>建立配送單</b>
+      <span>店外客戶訂單，呼叫 Shiper 代送</span>
+    </a>
+
+    <a href="/store/orders">
+      <b>訂單管理</b>
+      <span>詳細訂單、歷史與篩選</span>
+    </a>
+
+    <a href="/store/products">
+      <b>商品管理</b>
+      <span>新增商品、價格、上下架</span>
+    </a>
+
+    <a href="/store/setup">
+      <b>店家設定</b>
+      <span>地址、營業時間、圖片、介紹</span>
+    </a>
+
+    <a href="/store/accounting">
+      <b>店家對帳</b>
+      <span>商品收入、待收款、平台費</span>
+    </a>
+
+    <a href="/blocks">
+      <b>BlockFGO / TimeBlock</b>
+      <span>交易留證與貢獻紀錄</span>
+    </a>
+
+    <a href="/line/bind">
+      <b>LINE 綁定</b>
+      <span>STRO 通知用，不是登入</span>
+    </a>
+
+    <a href="/store/contract">
+      <b>合約 / 文件</b>
+      <span>簽署後只能查看，不能刪除</span>
+    </a>
+
+    <a href="/logout">
+      <b>登出</b>
+      <span>離開店家帳號</span>
+    </a>
+  </div>
+</details>
+
+<section class="grid-2">
+  <a class="btn secondary" href="/store/orders">訂單管理 / 詳細列表</a>
+  <a class="btn" href="/store/orders/new">建立配送單</a>
+</section>
+
+{% endblock %}
