@@ -142,10 +142,13 @@ def check_db():
             "accounting_entries",
             "blocks",
         ]:
+            table_is_present = table_exists(conn, table)
+            table_rows = table_count(conn, table)
+
             print(
                 f"{table}: "
-                f"exists={yesno(table_exists(conn, table))}, "
-                f"rows={table_count(conn, table)}"
+                f"exists={yesno(table_is_present)}, "
+                f"rows={table_rows}"
             )
 
         line_sql = table_sql(conn, "line_contact_bindings")
@@ -175,6 +178,28 @@ def check_files():
     app_py = BASE_DIR / "app.py"
     schema_sql = BASE_DIR / "schema.sql"
 
+    app_has_render_commit = file_contains(app_py, "RENDER_GIT_COMMIT")
+    app_has_health_render = file_contains(app_py, "/health/render")
+    accounting_has_admin_summary = file_contains(
+        accounting_service,
+        "def admin_accounting_summary",
+    )
+    accounting_has_list_entries = file_contains(
+        accounting_service,
+        "def list_admin_accounting_entries",
+    )
+    admin_has_safe_query = file_contains(admin_routes, "_safe_query_all")
+    line_has_liff_debug = file_contains(line_routes, "line_liff_id_set")
+    bind_has_credentials = file_contains(bind_html, 'credentials: "same-origin"')
+    schema_allows_admin = file_contains(
+        schema_sql,
+        "'CUSTOMER','STORE','DRIVER','ADMIN'",
+    )
+    schema_allows_accounting_directions = file_contains(
+        schema_sql,
+        "'INFO','CREDIT','DEBIT','IN','OUT'",
+    )
+
     print("")
     print("== FILE CHECK ==")
     print(f"app.py lines: {file_line_count(app_py)}")
@@ -184,58 +209,52 @@ def check_files():
 
     print("")
     print("== PATCH PRESENCE CHECK ==")
-    print(
-        "app.py has RENDER_GIT_COMMIT: "
-        f"{yesno(file_contains(app_py, 'RENDER_GIT_COMMIT'))}"
-    )
-    print(
-        "app.py has /health/render: "
-        f"{yesno(file_contains(app_py, '/health/render'))}"
-    )
+    print(f"app.py has RENDER_GIT_COMMIT: {yesno(app_has_render_commit)}")
+    print(f"app.py has /health/render: {yesno(app_has_health_render)}")
     print(
         "accounting_service has admin_accounting_summary: "
-        f"{yesno(file_contains(accounting_service, 'def admin_accounting_summary'))}"
+        f"{yesno(accounting_has_admin_summary)}"
     )
     print(
         "accounting_service has list_admin_accounting_entries: "
-        f"{yesno(file_contains(accounting_service, 'def list_admin_accounting_entries'))}"
+        f"{yesno(accounting_has_list_entries)}"
     )
-    print(
-        "admin_routes has safe accounting query: "
-        f"{yesno(file_contains(admin_routes, '_safe_query_all'))}"
-    )
-    print(
-        "line_routes has line_liff_id_set: "
-        f"{yesno(file_contains(line_routes, 'line_liff_id_set'))}"
-    )
-    print(
-        "bind.html has credentials same-origin: "
-        f"{yesno(file_contains(bind_html, 'credentials: \"same-origin\"'))}"
-    )
-    print(
-        "schema allows ADMIN role: "
-        f"{yesno(file_contains(schema_sql, \"'CUSTOMER','STORE','DRIVER','ADMIN'\"))}"
-    )
+    print(f"admin_routes has safe accounting query: {yesno(admin_has_safe_query)}")
+    print(f"line_routes has line_liff_id_set: {yesno(line_has_liff_debug)}")
+    print(f"bind.html has credentials same-origin: {yesno(bind_has_credentials)}")
+    print(f"schema allows ADMIN role: {yesno(schema_allows_admin)}")
     print(
         "schema allows INFO/CREDIT/DEBIT: "
-        f"{yesno(file_contains(schema_sql, \"'INFO','CREDIT','DEBIT','IN','OUT'\"))}"
+        f"{yesno(schema_allows_accounting_directions)}"
     )
 
 
 def check_git():
+    render_service = env_value(
+        "RENDER_SERVICE_NAME",
+        env_value("RENDER_SERVICE_ID", "-"),
+    )
+    render_commit = env_value("RENDER_GIT_COMMIT", "-")
+    current_branch = run(["git", "branch", "--show-current"])
+    current_head = run(["git", "rev-parse", "HEAD"])
+    latest_commit = run(["git", "log", "-1", "--oneline"])
+    git_status = run(["git", "status", "--short"])
+
     print("== GIT / RENDER ==")
-    print(f"Render service: {env_value('RENDER_SERVICE_NAME', env_value('RENDER_SERVICE_ID', '-'))}")
-    print(f"Render git commit env: {env_value('RENDER_GIT_COMMIT', '-')}")
-    print(f"Current branch: {run(['git', 'branch', '--show-current'])}")
-    print(f"Current HEAD: {run(['git', 'rev-parse', 'HEAD'])}")
-    print(f"Latest commit: {run(['git', 'log', '-1', '--oneline'])}")
-    print(f"Git status: {run(['git', 'status', '--short'])}")
+    print(f"Render service: {render_service}")
+    print(f"Render git commit env: {render_commit}")
+    print(f"Current branch: {current_branch}")
+    print(f"Current HEAD: {current_head}")
+    print(f"Latest commit: {latest_commit}")
+    print(f"Git status: {git_status}")
 
 
 def check_env():
+    app_env = env_value("APP_ENV", env_value("FLASK_ENV", "-"))
+
     print("")
     print("== ENV SAFE CHECK ==")
-    print(f"APP_ENV / FLASK_ENV: {env_value('APP_ENV', env_value('FLASK_ENV', '-'))}")
+    print(f"APP_ENV / FLASK_ENV: {app_env}")
     print(f"PUBLIC_BASE_URL: {env_value('PUBLIC_BASE_URL', '-')}")
     print(f"APP_BASE_URL: {env_value('APP_BASE_URL', '-')}")
     print(f"DATABASE_PATH set: {yesno(env_set('DATABASE_PATH'))}")
