@@ -63,6 +63,59 @@ def _liff_id():
     ).strip()
 
 
+def _mask_line_user_id(value):
+    value = _safe_text(value)
+
+    if not value:
+        return ""
+
+    if len(value) <= 10:
+        return value[:2] + "****"
+
+    return value[:6] + "****" + value[-4:]
+
+
+def _table_exists(db, table_name):
+    try:
+        row = db.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+            LIMIT 1
+            """,
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _table_count(db, table_name):
+    try:
+        if not _table_exists(db, table_name):
+            return 0
+
+        row = db.execute(f"SELECT COUNT(*) AS c FROM {table_name}").fetchone()
+        return int(row["c"] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+def _table_columns(db, table_name):
+    try:
+        if not _table_exists(db, table_name):
+            return []
+
+        return [
+            row["name"]
+            for row in db.execute(f"PRAGMA table_info({table_name})").fetchall()
+        ]
+    except Exception:
+        return []
+
+
 def _notify_admin_line_bind_success(db, *, user, ctx, binding):
     """
     Notify Admin directly after One-Tap LINE bind.
@@ -237,18 +290,32 @@ def bind_one_tap():
       picture_url: profile.pictureUrl
     }
 
-    Backend:
-    - validates logged-in webapp user
-    - binds LINE userId to current role/target_code
-    - notifies Admin direct
-    - notifies user by LINE and Email
+    Hard rules:
+    - User must already be logged in to the webapp.
+    - This route must not create account.
+    - This route must not login user.
+    - This route must not grant permission.
+    - This route only binds current logged-in account to LINE userId for notification.
     """
     db = get_db()
     user = current_user()
     payload = request.get_json(silent=True) or {}
 
     if not user:
-        return jsonify({"ok": False, "error": "login required"}), 401
+        return jsonify(
+            {
+                "ok": False,
+                "error": "login required",
+                "hint": (
+                    "請先在 FUMAP GO webapp 登入，再從同一個瀏覽器或 LINE LIFF "
+                    "開啟 /line/bind 進行綁定。此 API 不會建立登入狀態。"
+                ),
+                "session_debug": {
+                    "has_user_id": bool(session.get("user_id")),
+                    "role": session.get("role", ""),
+                },
+            }
+        ), 401
 
     line_user_id = _safe_text(
         payload.get("line_user_id")
@@ -469,11 +536,16 @@ def api_check():
 
     binding = get_active_binding_by_role_target(db, role, target_code)
 
+    safe_binding = None
+    if binding:
+        safe_binding = dict(binding)
+        safe_binding["line_user_id"] = _mask_line_user_id(safe_binding.get("line_user_id", ""))
+
     return jsonify(
         {
             "ok": True,
             "active": bool(binding),
-            "binding": dict(binding) if binding else None,
+            "binding": safe_binding,
             "note": "This endpoint only checks LINE contact binding. It does not authenticate users.",
         }
     )
@@ -569,18 +641,61 @@ def api_test_admin_push():
 @line_bp.get("/debug")
 def debug_list():
     """
-    Lightweight debug page.
-    Only available if logged in as admin operator.
+    Admin-safe LINE binding debug endpoint.
+
+    Rules:
+    - Admin only.
+    - Does not expose full line_user_id.
+    - Shows enough production diagnostics for LIFF/session/gateway issues.
     """
     if session.get("role") != "ADMIN_OPERATOR":
         flash("此頁面僅限 Admin。", "danger")
         return redirect(role_home(session.get("role")))
 
-    rows = list_bindings(get_db(), limit=200)
+    db = get_db()
+
+    table_exists = _table_exists(db, "line_contact_bindings")
+    columns = _table_columns(db, "line_contact_bindings")
+
+    try:
+        rows = list_bindings(db, limit=200) if table_exists else []
+    except Exception as exc:
+        print(f"[LINE_DEBUG][LIST_BINDINGS][ERROR] {exc}")
+        rows = []
+
+    safe_rows = []
+
+    for row in rows:
+        item = dict(row)
+        item["line_user_id"] = _mask_line_user_id(item.get("line_user_id", ""))
+        safe_rows.append(item)
 
     return jsonify(
         {
             "ok": True,
-            "bindings": [dict(row) for row in rows],
+            "db_path": current_app.config.get("DATABASE_PATH", ""),
+            "public_base_url": current_app.config.get("PUBLIC_BASE_URL", ""),
+            "app_base_url": current_app.config.get("APP_BASE_URL", ""),
+
+            "line_liff_id_set": bool(current_app.config.get("LINE_LIFF_ID", "")),
+            "linehook_base_url_set": bool(
+                current_app.config.get("LINEHOOK_BASE_URL", "")
+                or current_app.config.get("LINE_GATEWAY_BASE_URL", "")
+            ),
+            "admin_line_user_id_set": bool(current_app.config.get("FGO_ADMIN_LINE_USER_ID", "")),
+
+            "session": {
+                "has_user_id": bool(session.get("user_id")),
+                "role": session.get("role", ""),
+                "login_id": session.get("login_id", ""),
+            },
+
+            "table_exists": table_exists,
+            "columns": columns,
+            "bindings_count": _table_count(db, "line_contact_bindings"),
+            "users_count": _table_count(db, "users"),
+            "stores_count": _table_count(db, "stores"),
+            "drivers_count": _table_count(db, "drivers"),
+            "bindings": safe_rows,
         }
     )
