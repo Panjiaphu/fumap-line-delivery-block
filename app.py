@@ -207,7 +207,7 @@ def register_routes(app):
     from routes.public_routes import public_bp
 
     app.register_blueprint(public_bp)
-    print("අ[BOOT] registered blueprint: routes.public_routes.public_bp".replace("අ", ""))
+    print("[BOOT] registered blueprint: routes.public_routes.public_bp")
 
     optional_blueprints = [
         ("routes.auth_routes", "auth_bp"),
