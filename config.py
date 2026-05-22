@@ -34,6 +34,7 @@ def get_float_env(key, default):
 class Config:
     APP_NAME = os.getenv("APP_NAME", "FUMAP GO")
     APP_ENV = os.getenv("FLASK_ENV", os.getenv("APP_MODE", "production"))
+
     SECRET_KEY = os.getenv(
         "SECRET_KEY",
         os.getenv("FLASK_SECRET_KEY", "fumap-go-dev-secret"),
@@ -48,8 +49,27 @@ class Config:
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", os.getenv("ADMIN_PASS", "admin123"))
     ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 
+    # ---------------------------------------------------------------------
+    # LINE / LIFF / LINE Gateway config
+    # ---------------------------------------------------------------------
+    # LINE_LIFF_ID:
+    #   LIFF app id used by templates/mobile/line/bind.html.
+    #
+    # LINEHOOK_BASE_URL / LINE_GATEWAY_BASE_URL:
+    #   Webapp calls the separate LINE gateway service through /internal/push.
+    #   Keep both names for backward compatibility.
+    #
+    # FGO_INTERNAL_SECRET:
+    #   Shared secret between this webapp and the LINE gateway.
+    #
+    # FGO_ADMIN_LINE_USER_ID:
+    #   Direct LINE userId for Admin notifications. Must start with U...
+    #
+    LINE_LIFF_ID = os.getenv("LINE_LIFF_ID", "").strip()
+    LINEHOOK_BASE_URL = os.getenv("LINEHOOK_BASE_URL", "").rstrip("/")
     LINE_GATEWAY_BASE_URL = os.getenv("LINE_GATEWAY_BASE_URL", "").rstrip("/")
     FGO_INTERNAL_SECRET = os.getenv("FGO_INTERNAL_SECRET", "")
+    FGO_ADMIN_LINE_USER_ID = os.getenv("FGO_ADMIN_LINE_USER_ID", "").strip()
 
     PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
     APP_BASE_URL = os.getenv(
@@ -139,8 +159,15 @@ class Config:
     )
     UPLOAD_URL_PREFIX = os.getenv("UPLOAD_URL_PREFIX", "/static/uploads").rstrip("/")
 
+    # Session/cookie config.
+    #
+    # For LIFF webview:
+    # - User must already be logged in to the webapp.
+    # - /line/bind/one-tap must not create login/session.
+    # - SESSION_COOKIE_SECURE should be true in production HTTPS.
+    #
     SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
     SESSION_COOKIE_SECURE = get_bool_env("SESSION_COOKIE_SECURE", False)
 
 
