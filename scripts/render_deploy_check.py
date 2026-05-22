@@ -142,17 +142,26 @@ def check_db():
             "accounting_entries",
             "blocks",
         ]:
-            print(f"{table}: exists={yesno(table_exists(conn, table))}, rows={table_count(conn, table)}")
+            print(
+                f"{table}: "
+                f"exists={yesno(table_exists(conn, table))}, "
+                f"rows={table_count(conn, table)}"
+            )
 
         line_sql = table_sql(conn, "line_contact_bindings")
         acc_sql = table_sql(conn, "accounting_entries")
 
+        line_allows_admin = "'ADMIN'" in line_sql
+        acc_allows_info = "'INFO'" in acc_sql
+        acc_allows_credit = "'CREDIT'" in acc_sql
+        acc_allows_debit = "'DEBIT'" in acc_sql
+
         print("")
         print("== DB CONSTRAINT CHECK ==")
-        print(f"line_contact_bindings allows ADMIN: {yesno(\"'ADMIN'\" in line_sql)}")
-        print(f"accounting_entries allows INFO: {yesno(\"'INFO'\" in acc_sql)}")
-        print(f"accounting_entries allows CREDIT: {yesno(\"'CREDIT'\" in acc_sql)}")
-        print(f"accounting_entries allows DEBIT: {yesno(\"'DEBIT'\" in acc_sql)}")
+        print(f"line_contact_bindings allows ADMIN: {yesno(line_allows_admin)}")
+        print(f"accounting_entries allows INFO: {yesno(acc_allows_info)}")
+        print(f"accounting_entries allows CREDIT: {yesno(acc_allows_credit)}")
+        print(f"accounting_entries allows DEBIT: {yesno(acc_allows_debit)}")
 
     finally:
         conn.close()
@@ -175,8 +184,14 @@ def check_files():
 
     print("")
     print("== PATCH PRESENCE CHECK ==")
-    print(f"app.py has RENDER_GIT_COMMIT: {yesno(file_contains(app_py, 'RENDER_GIT_COMMIT'))}")
-    print(f"app.py has /health/render: {yesno(file_contains(app_py, '/health/render'))}")
+    print(
+        "app.py has RENDER_GIT_COMMIT: "
+        f"{yesno(file_contains(app_py, 'RENDER_GIT_COMMIT'))}"
+    )
+    print(
+        "app.py has /health/render: "
+        f"{yesno(file_contains(app_py, '/health/render'))}"
+    )
     print(
         "accounting_service has admin_accounting_summary: "
         f"{yesno(file_contains(accounting_service, 'def admin_accounting_summary'))}"
@@ -189,10 +204,22 @@ def check_files():
         "admin_routes has safe accounting query: "
         f"{yesno(file_contains(admin_routes, '_safe_query_all'))}"
     )
-    print(f"line_routes has line_liff_id_set: {yesno(file_contains(line_routes, 'line_liff_id_set'))}")
-    print(f"bind.html has credentials same-origin: {yesno(file_contains(bind_html, 'credentials: \"same-origin\"'))}")
-    print(f"schema allows ADMIN role: {yesno(file_contains(schema_sql, \"'CUSTOMER','STORE','DRIVER','ADMIN'\"))}")
-    print(f"schema allows INFO/CREDIT/DEBIT: {yesno(file_contains(schema_sql, \"'INFO','CREDIT','DEBIT','IN','OUT'\"))}")
+    print(
+        "line_routes has line_liff_id_set: "
+        f"{yesno(file_contains(line_routes, 'line_liff_id_set'))}"
+    )
+    print(
+        "bind.html has credentials same-origin: "
+        f"{yesno(file_contains(bind_html, 'credentials: \"same-origin\"'))}"
+    )
+    print(
+        "schema allows ADMIN role: "
+        f"{yesno(file_contains(schema_sql, \"'CUSTOMER','STORE','DRIVER','ADMIN'\"))}"
+    )
+    print(
+        "schema allows INFO/CREDIT/DEBIT: "
+        f"{yesno(file_contains(schema_sql, \"'INFO','CREDIT','DEBIT','IN','OUT'\"))}"
+    )
 
 
 def check_git():
