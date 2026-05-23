@@ -351,6 +351,11 @@ def _ensure_mvp_columns(conn):
             ("difficulty_flags_json", "difficulty_flags_json TEXT"),
             ("customer_name", "customer_name TEXT"),
             ("customer_phone", "customer_phone TEXT"),
+
+            # Guest checkout / email-primary customer fields.
+            ("customer_email", "customer_email TEXT"),
+            ("guest_access_token", "guest_access_token TEXT"),
+
             ("note", "note TEXT"),
             ("proof_image_url", "proof_image_url TEXT"),
 
@@ -611,6 +616,8 @@ def _backfill_defaults(conn):
             extra_fee_twd = COALESCE(extra_fee_twd, 0),
             rain_fee_twd = COALESCE(rain_fee_twd, 0),
             total_twd = COALESCE(total_twd, 0),
+            customer_email = COALESCE(customer_email, ''),
+            guest_access_token = COALESCE(guest_access_token, ''),
             delivery_lat = COALESCE(delivery_lat, 0),
             delivery_lng = COALESCE(delivery_lng, 0),
             distance_band = COALESCE(NULLIF(distance_band, ''), '0-2KM'),
@@ -718,6 +725,11 @@ def _ensure_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_orders_invoice_required ON orders(invoice_required)",
         "CREATE INDEX IF NOT EXISTS idx_orders_invoice_type ON orders(invoice_type)",
 
+        # Guest checkout / email-primary lookup indexes.
+        "CREATE INDEX IF NOT EXISTS idx_orders_customer_email ON orders(customer_email)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_guest_access_token ON orders(guest_access_token)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_guest_tracking ON orders(order_code, guest_access_token)",
+
         "CREATE INDEX IF NOT EXISTS idx_orders_payment_proof_status ON orders(payment_proof_status)",
         "CREATE INDEX IF NOT EXISTS idx_orders_payment_proof_uploaded_at ON orders(payment_proof_uploaded_at)",
         "CREATE INDEX IF NOT EXISTS idx_orders_payment_verified_at ON orders(payment_verified_at)",
@@ -792,4 +804,3 @@ def _ensure_indexes(conn):
             conn.execute(sql)
         except sqlite3.OperationalError:
             continue
-            
