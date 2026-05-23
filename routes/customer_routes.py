@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, redirect, flash
+from flask import Blueprint, render_template, request, redirect, flash, abort
 
 from db import get_db
 from services.permission_service import login_required, role_required, current_user
@@ -7,10 +7,12 @@ from services.order_service import (
     create_customer_order,
     get_store_by_code,
     get_order_by_code,
+    get_guest_order_by_code_token,
     get_order_items,
     list_customer_orders,
     list_public_stores,
     list_store_products,
+    normalize_customer_email,
 )
 from services.block_service import get_order_blocks, create_block
 from services.code_service import now_iso
@@ -66,6 +68,29 @@ def _safe_text(value, default=""):
     return value if value else default
 
 
+def _valid_email(value):
+    value = normalize_email(value)
+
+    if not value:
+        return False
+
+    if len(value) > 255:
+        return False
+
+    if "@" not in value:
+        return False
+
+    local, _, domain = value.partition("@")
+
+    if not local or not domain:
+        return False
+
+    if "." not in domain:
+        return False
+
+    return True
+
+
 def _user_email(user):
     return normalize_email(_row_get(user, "email", ""))
 
@@ -74,8 +99,13 @@ def _user_email_verified(user):
     return bool(_safe_text(_row_get(user, "email_verified_at", "")))
 
 
+def _is_logged_customer(user):
+    return bool(user and _row_get(user, "role", "") == "CUSTOMER")
+
+
 def _customer_line_target_code(user):
     user_id = _row_get(user, "id", "")
+
     return f"CUS-{user_id}" if user_id else ""
 
 
@@ -83,7 +113,12 @@ def _admin_line_target_code():
     return "ADMIN"
 
 
-def _absolute_order_url(order_code):
+def _absolute_order_url(order_code, guest_access_token=""):
+    order_code = _safe_text(order_code)
+
+    if guest_access_token:
+        return f"/guest/orders/{order_code}?token={guest_access_token}"
+
     return f"/orders?order_code={order_code}"
 
 
@@ -95,7 +130,25 @@ def _payment_proof_url(order_code):
     return f"/proofs/orders/{order_code}/payment"
 
 
-def _notify_customer_payment_proof_received(db, *, order, user):
+def _guest_order_url(order):
+    order_code = _safe_text(_row_get(order, "order_code", ""))
+    guest_access_token = _safe_text(_row_get(order, "guest_access_token", ""))
+
+    if not order_code or not guest_access_token:
+        return "/show"
+
+    return f"/guest/orders/{order_code}?token={guest_access_token}"
+
+
+def _safe_push_line(db, **kwargs):
+    try:
+        return push_to_role_target(db, **kwargs)
+    except Exception as exc:
+        print(f"[LINE_PUSH][CUSTOMER_ROUTES][SKIPPED] {exc}")
+        return {"ok": False, "skipped": True, "error": str(exc)}
+
+
+def _notify_customer_payment_proof_received(db, *, order, user=None, customer_email=""):
     """
     Notify customer after payment proof upload.
 
@@ -104,14 +157,20 @@ def _notify_customer_payment_proof_received(db, *, order, user):
     Notification failure must not rollback proof/order.
     """
     order_code = _safe_text(_row_get(order, "order_code", ""))
-    customer_email = _user_email(user)
+    guest_access_token = _safe_text(_row_get(order, "guest_access_token", ""))
+
+    customer_email = (
+        normalize_email(customer_email)
+        or normalize_email(_row_get(order, "customer_email", ""))
+        or _user_email(user)
+    )
 
     try:
         if customer_email:
             send_customer_payment_proof_received_email(
                 order,
                 customer_email,
-                order_url=_absolute_order_url(order_code),
+                order_url=_absolute_order_url(order_code, guest_access_token),
             )
     except Exception as exc:
         print(f"[PAYMENT_PROOF][EMAIL][CUSTOMER][ERROR] {exc}")
@@ -120,7 +179,7 @@ def _notify_customer_payment_proof_received(db, *, order, user):
         target_code = _customer_line_target_code(user)
 
         if target_code:
-            push_to_role_target(
+            _safe_push_line(
                 db,
                 role="CUSTOMER",
                 target_code=target_code,
@@ -158,7 +217,7 @@ def _notify_admin_payment_proof_uploaded(db, *, order, proof_url=None):
         print(f"[PAYMENT_PROOF][EMAIL][ADMIN][ERROR] {exc}")
 
     try:
-        push_to_role_target(
+        _safe_push_line(
             db,
             role="ADMIN",
             target_code=_admin_line_target_code(),
@@ -254,24 +313,27 @@ def _store_not_accepting_message(store):
     return f"店家目前無法接單：{label}。"
 
 
+def _order_actor_context(user, order):
+    if _is_logged_customer(user):
+        user_id = _row_get(user, "id", "")
+        return {
+            "actor_role": "CUSTOMER",
+            "actor_id": user_id,
+            "actor_code": _row_get(user, "login_id", "") or f"CUS-{user_id}",
+        }
+
+    return {
+        "actor_role": "GUEST_CUSTOMER",
+        "actor_id": None,
+        "actor_code": f"GUEST-{_row_get(order, 'order_code', '')}",
+    }
+
+
 @customer_bp.get("/customer")
 @login_required
 @role_required("CUSTOMER")
 def customer_home():
     return redirect("/show")
-
-
-@customer_bp.get("/show")
-def marketplace():
-    db = get_db()
-    city_block = request.args.get("city_block", "").strip().upper() or None
-    stores = list_public_stores(db, city_block=city_block)
-
-    return render_template(
-        "mobile/customer/marketplace.html",
-        stores=stores,
-        selected_city_block=city_block or "",
-    )
 
 
 @customer_bp.get("/show/store/<store_code>")
@@ -296,11 +358,12 @@ def store_detail(store_code):
 
 
 @customer_bp.route("/show/checkout/<store_code>", methods=["GET", "POST"])
-@login_required
-@role_required("CUSTOMER")
 def checkout(store_code):
     db = get_db()
     user = current_user()
+    is_logged_customer = _is_logged_customer(user)
+
+    customer_user = user if is_logged_customer else None
 
     store = get_store_by_code(db, store_code)
 
@@ -315,10 +378,21 @@ def checkout(store_code):
         flash("此店家尚未有可販售商品。", "warning")
         return redirect(f"/show/store/{store_code}")
 
-    has_cum_bind = bool(customer_can_photo_proof(db, user))
-    email_verified = _user_email_verified(user)
-    can_photo_proof = email_verified
-    can_bank_transfer = email_verified
+    default_customer_email = _user_email(user) if is_logged_customer else ""
+    email_available = _valid_email(default_customer_email)
+
+    has_cum_bind = False
+
+    if is_logged_customer:
+        try:
+            has_cum_bind = bool(customer_can_photo_proof(db, user))
+        except Exception:
+            has_cum_bind = False
+
+    can_photo_proof = email_available
+    can_bank_transfer = email_available
+    email_verified = _user_email_verified(user) if is_logged_customer else False
+
     rain_surcharge_enabled = is_rain_surcharge_enabled(db)
     platform_payment_info = get_platform_payment_info()
 
@@ -337,21 +411,35 @@ def checkout(store_code):
             if delivery_method not in {"FACE_TO_FACE", "PHOTO_PROOF"}:
                 delivery_method = "FACE_TO_FACE"
 
-            if payment_method == "BANK_TRANSFER" and not email_verified:
-                flash("請先完成 Email 驗證後，才能使用轉帳付款。", "danger")
+            submitted_customer_email = normalize_email(
+                request.form.get("customer_email", "")
+                or default_customer_email
+            )
+
+            if submitted_customer_email:
+                submitted_customer_email = normalize_customer_email(submitted_customer_email)
+
+            submitted_email_valid = _valid_email(submitted_customer_email)
+
+            if payment_method == "BANK_TRANSFER" and not submitted_email_valid:
+                flash("請輸入有效 Email 後，才能使用轉帳付款。", "danger")
                 return redirect(f"/show/checkout/{store_code}")
 
-            if delivery_method == "PHOTO_PROOF" and not email_verified:
-                delivery_method = "FACE_TO_FACE"
+            if delivery_method == "PHOTO_PROOF" and not submitted_email_valid:
+                flash("請輸入有效 Email 後，才能選擇拍照完成。", "danger")
+                return redirect(f"/show/checkout/{store_code}")
+
+            order_source = "CUSTOMER_MARKETPLACE" if is_logged_customer else "GUEST_CHECKOUT"
 
             order = create_customer_order(
                 db,
-                customer_user=user,
+                customer_user=customer_user,
                 store_code=store_code,
                 product_id=request.form.get("product_id"),
                 qty=request.form.get("qty", 1),
                 customer_name=request.form.get("customer_name", ""),
                 customer_phone=request.form.get("customer_phone", ""),
+                customer_email=submitted_customer_email,
                 delivery_address=request.form.get("delivery_address", ""),
                 floor_number=request.form.get("floor_number", ""),
                 address_note=request.form.get("address_note", ""),
@@ -368,6 +456,7 @@ def checkout(store_code):
                 invoice_title=request.form.get("invoice_title", ""),
                 invoice_tax_id=request.form.get("invoice_tax_id", ""),
                 invoice_note=request.form.get("invoice_note", ""),
+                order_source=order_source,
             )
 
             if order["payment_method"] == "BANK_TRANSFER":
@@ -389,12 +478,14 @@ def checkout(store_code):
                     uploaded_at=now if proof_url else "",
                 )
 
+                actor = _order_actor_context(user, order)
+
                 create_block(
                     db,
                     event_type="BANK_TRANSFER_ORDER_CREATED",
-                    actor_role="CUSTOMER",
-                    actor_id=user["id"],
-                    actor_code=user["login_id"],
+                    actor_role=actor["actor_role"],
+                    actor_id=actor["actor_id"],
+                    actor_code=actor["actor_code"],
                     order_id=order["id"],
                     order_code=order["order_code"],
                     previous_status="",
@@ -402,14 +493,18 @@ def checkout(store_code):
                     amount_twd=order["total_twd"],
                     payload={
                         "order_code": order["order_code"],
+                        "order_source": order_source,
+                        "is_guest_order": not is_logged_customer,
+                        "customer_email_saved": bool(submitted_customer_email),
                         "payment_method": "BANK_TRANSFER",
                         "payment_status": "PENDING",
                         "payment_proof_uploaded": bool(proof_url),
                         "payment_proof_status": "PENDING_REVIEW" if proof_url else "WAITING_UPLOAD",
                         "admin_hold": 1,
                         "admin_hold_reason": "等待 Admin 確認轉帳付款",
-                        "email_verified": True,
-                        "line_bind_optional": bool(has_cum_bind),
+                        "email_primary_notification": bool(submitted_customer_email),
+                        "line_optional_notification": bool(has_cum_bind),
+                        "has_line_bind": bool(has_cum_bind),
                         "invoice_required": int(order["invoice_required"] or 0),
                         "invoice_type": order["invoice_type"] or "NONE",
                         "invoice_title": order["invoice_title"] or "",
@@ -423,9 +518,9 @@ def checkout(store_code):
                     create_block(
                         db,
                         event_type="PAYMENT_PROOF_UPLOADED",
-                        actor_role="CUSTOMER",
-                        actor_id=user["id"],
-                        actor_code=user["login_id"],
+                        actor_role=actor["actor_role"],
+                        actor_id=actor["actor_id"],
+                        actor_code=actor["actor_code"],
                         order_id=order["id"],
                         order_code=order["order_code"],
                         previous_status="",
@@ -433,6 +528,9 @@ def checkout(store_code):
                         amount_twd=order["total_twd"],
                         payload={
                             "order_code": order["order_code"],
+                            "order_source": order_source,
+                            "is_guest_order": not is_logged_customer,
+                            "customer_email_saved": bool(submitted_customer_email),
                             "payment_method": "BANK_TRANSFER",
                             "payment_status": "PENDING",
                             "payment_proof_status": "PENDING_REVIEW",
@@ -450,7 +548,8 @@ def checkout(store_code):
                     _notify_customer_payment_proof_received(
                         db,
                         order=updated_order,
-                        user=user,
+                        user=user if is_logged_customer else None,
+                        customer_email=submitted_customer_email,
                     )
                     _notify_admin_payment_proof_uploaded(
                         db,
@@ -461,14 +560,21 @@ def checkout(store_code):
                     flash("訂單已建立，轉帳證明已上傳，等待 Admin 確認。", "success")
                 else:
                     flash(
-                        "訂單已建立。此訂單為轉帳付款，請在訂單頁上傳轉帳證明，等待 Admin 確認後店家才會處理。",
+                        "訂單已建立。此訂單為轉帳付款，請保留訂單追蹤頁，並盡快補交轉帳證明給 Admin。",
                         "warning",
                     )
 
-                return redirect(f"/orders?order_code={order['order_code']}")
+                if is_logged_customer:
+                    return redirect(f"/orders?order_code={order['order_code']}")
+
+                return redirect(_guest_order_url(updated_order))
 
             flash("訂單已建立，已直接送入店家工作台。", "success")
-            return redirect(f"/orders?order_code={order['order_code']}")
+
+            if is_logged_customer:
+                return redirect(f"/orders?order_code={order['order_code']}")
+
+            return redirect(_guest_order_url(order))
 
         except ImageUploadError as exc:
             db.rollback()
@@ -486,14 +592,40 @@ def checkout(store_code):
         "mobile/customer/checkout.html",
         store=store,
         products=products,
-        user=user,
+        user=user if is_logged_customer else None,
         can_photo_proof=can_photo_proof,
         can_bank_transfer=can_bank_transfer,
         has_cum_bind=has_cum_bind,
         email_verified=email_verified,
+        customer_email=default_customer_email,
+        is_guest_checkout=not is_logged_customer,
         rain_surcharge_enabled=rain_surcharge_enabled,
         platform_payment_info=platform_payment_info,
         business_hours_status=store.get("business_hours_status"),
+    )
+
+
+@customer_bp.get("/guest/orders/<order_code>")
+def guest_order_detail(order_code):
+    db = get_db()
+
+    token = request.args.get("token", "").strip()
+
+    order = get_guest_order_by_code_token(db, order_code, token)
+
+    if not order:
+        abort(404)
+
+    items = get_order_items(db, order["id"])
+    blocks = get_order_blocks(db, order["order_code"])
+
+    return render_template(
+        "mobile/customer/guest_order_detail.html",
+        order=order,
+        selected_order=order,
+        selected_items=items,
+        selected_blocks=blocks,
+        platform_payment_info=get_platform_payment_info(),
     )
 
 
@@ -515,7 +647,13 @@ def customer_orders():
     if order_code:
         selected_order = get_order_by_code(db, order_code)
 
-        if selected_order and int(selected_order["customer_user_id"]) == int(user["id"]):
+        selected_customer_user_id = _row_get(selected_order, "customer_user_id", 0)
+
+        if (
+            selected_order
+            and selected_customer_user_id
+            and int(selected_customer_user_id) == int(user["id"])
+        ):
             selected_items = get_order_items(db, selected_order["id"])
             selected_blocks = get_order_blocks(db, selected_order["order_code"])
         else:
@@ -532,7 +670,6 @@ def customer_orders():
         user=user,
         email_verified=_user_email_verified(user),
     )
-
 
 @customer_bp.post("/customer/orders/<order_code>/payment-proof")
 @login_required
@@ -556,8 +693,13 @@ def upload_payment_proof(order_code):
         flash("只有轉帳付款訂單可以上傳轉帳證明。", "warning")
         return redirect(f"/orders?order_code={order_code}")
 
-    if not _user_email_verified(user):
-        flash("請先完成 Email 驗證後，才能上傳轉帳付款證明。", "danger")
+    customer_email = normalize_email(
+        _row_get(order, "customer_email", "")
+        or _user_email(user)
+    )
+
+    if not _valid_email(customer_email):
+        flash("請先提供有效 Email 後，才能上傳轉帳付款證明。", "danger")
         return redirect(f"/orders?order_code={order_code}")
 
     file = request.files.get("payment_proof")
@@ -572,6 +714,7 @@ def upload_payment_proof(order_code):
         proof_url = _save_payment_proof_file(file, order_code)
 
         previous_proof_status = ""
+
         try:
             previous_proof_status = order["payment_proof_status"] or ""
         except Exception:
@@ -623,8 +766,9 @@ def upload_payment_proof(order_code):
                 "payment_proof_image_url": proof_url,
                 "admin_hold": 1,
                 "admin_hold_reason": "等待 Admin 確認轉帳付款",
-                "email_verified": True,
-                "line_bind_optional": bool(customer_can_photo_proof(db, user)),
+                "customer_email_saved": bool(customer_email),
+                "email_primary_notification": True,
+                "line_optional_notification": bool(customer_can_photo_proof(db, user)),
             },
             commit=False,
         )
@@ -637,6 +781,7 @@ def upload_payment_proof(order_code):
             db,
             order=updated_order,
             user=user,
+            customer_email=customer_email,
         )
 
         _notify_admin_payment_proof_uploaded(
