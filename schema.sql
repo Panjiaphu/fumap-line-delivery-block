@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL CHECK(role IN ('CUSTOMER','STORE','DRIVER','ADMIN_OPERATOR')),
     display_name TEXT,
     phone TEXT,
+    email TEXT,
+    email_verified_at TEXT,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -12,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
 CREATE TABLE IF NOT EXISTS stores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,11 +126,16 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_address TEXT NOT NULL,
     customer_name TEXT,
     customer_phone TEXT,
+    customer_email TEXT,
+    guest_access_token TEXT,
+
     note TEXT,
     proof_image_url TEXT,
 
     smartroad_lane TEXT,
     distance_km REAL DEFAULT 0,
+
+    order_source TEXT DEFAULT 'CUSTOMER_MARKETPLACE',
 
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -142,6 +150,10 @@ CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id);
 CREATE INDEX IF NOT EXISTS idx_orders_driver_id ON orders(driver_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_email ON orders(customer_email);
+CREATE INDEX IF NOT EXISTS idx_orders_guest_access_token ON orders(guest_access_token);
+CREATE INDEX IF NOT EXISTS idx_orders_guest_tracking ON orders(order_code, guest_access_token);
+CREATE INDEX IF NOT EXISTS idx_orders_order_source ON orders(order_source);
 
 CREATE TABLE IF NOT EXISTS order_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
