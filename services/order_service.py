@@ -1,3 +1,6 @@
+import re
+import secrets
+
 from services.delivery_fee_service import (
     DeliveryFeeError,
     build_delivery_fee_rule_json,
@@ -8,9 +11,6 @@ from services.smartroad_service import (
     calculate_smartroad_score,
     smartroad_db_payload,
 )
-
-import re
-
 from services.code_service import now_iso, unique_code, generate_order_code
 from services.block_service import create_block
 from services.store_hours_service import (
@@ -37,6 +37,9 @@ ORDER_STATUSES = {
     "WAITING_DRIVER",
     "DRIVER_ACCEPTED",
     "PICKED_UP",
+    "DELIVERY_ISSUE",
+    "RETURNING_TO_STORE",
+    "RETURNED_TO_STORE",
     "DELIVERED",
     "COMPLETED",
     "CANCELLED",
@@ -93,17 +96,76 @@ def _row_get(row, key, default=None):
     return default
 
 
+def _valid_email(value):
+    value = (value or "").strip().lower()
+
+    if not value:
+        return False
+
+    if len(value) > 255:
+        return False
+
+    if "@" not in value:
+        return False
+
+    local, _, domain = value.partition("@")
+
+    if not local or not domain:
+        return False
+
+    if "." not in domain:
+        return False
+
+    return True
+
+
+def normalize_customer_email(value):
+    value = (value or "").strip().lower()
+
+    if not value:
+        return ""
+
+    if not _valid_email(value):
+        raise OrderError("Email 格式不正確。")
+
+    return value
+
+
+def generate_guest_access_token(db):
+    for _ in range(10):
+        token = secrets.token_urlsafe(32)
+
+        exists = db.execute(
+            """
+            SELECT id
+            FROM orders
+            WHERE guest_access_token = ?
+            LIMIT 1
+            """,
+            (token,),
+        ).fetchone()
+
+        if not exists:
+            return token
+
+    raise OrderError("建立訪客訂單追蹤碼失敗，請再試一次。")
+
+
 def normalize_payment_method(value):
     value = (value or "COD").strip().upper()
+
     if value not in PAYMENT_METHODS:
         value = "COD"
+
     return value
 
 
 def normalize_delivery_method(value):
     value = (value or "FACE_TO_FACE").strip().upper()
+
     if value not in DELIVERY_METHODS:
         value = "FACE_TO_FACE"
+
     return value
 
 
@@ -289,6 +351,23 @@ def _smartroad_block_payload(smartroad):
         "smartroad_same_side": smartroad.get("smartroad_same_side", 0),
         "smartroad_uturn_risk": smartroad.get("smartroad_uturn_risk", 0),
     }
+
+
+def _safe_push_to_role_target(db, **kwargs):
+    """
+    LINE push is optional.
+
+    Notification failure must never rollback order creation.
+    """
+    try:
+        return push_to_role_target(db, **kwargs)
+    except Exception as exc:
+        print(f"[LINE_PUSH][SKIPPED][ORDER_SERVICE] {exc}")
+        return {
+            "ok": False,
+            "skipped": True,
+            "error": str(exc),
+        }
 
 
 def get_service_fee_twd():
@@ -496,6 +575,34 @@ def get_order_by_code(db, order_code):
     ).fetchone()
 
 
+def get_guest_order_by_code_token(db, order_code, guest_access_token):
+    order_code = (order_code or "").strip().upper()
+    guest_access_token = (guest_access_token or "").strip()
+
+    if not order_code or not guest_access_token:
+        return None
+
+    return db.execute(
+        """
+        SELECT o.*,
+               s.store_name,
+               s.store_code,
+               s.phone AS store_phone,
+               s.address AS store_address,
+               d.driver_code,
+               d.driver_name,
+               d.phone AS driver_phone
+        FROM orders o
+        JOIN stores s ON s.id = o.store_id
+        LEFT JOIN drivers d ON d.id = o.driver_id
+        WHERE o.order_code = ?
+          AND o.guest_access_token = ?
+        LIMIT 1
+        """,
+        (order_code, guest_access_token),
+    ).fetchone()
+
+
 def get_order_items(db, order_id):
     return db.execute(
         """
@@ -507,15 +614,17 @@ def get_order_items(db, order_id):
         (order_id,),
     ).fetchall()
 
+
 def create_customer_order(
     db,
     *,
-    customer_user,
+    customer_user=None,
     store_code,
     product_id,
     qty,
     customer_name,
     customer_phone,
+    customer_email="",
     delivery_address,
     floor_number,
     address_note="",
@@ -532,9 +641,12 @@ def create_customer_order(
     invoice_title="",
     invoice_tax_id="",
     invoice_note="",
+    order_source="CUSTOMER_MARKETPLACE",
 ):
-    if not customer_user or customer_user["role"] != "CUSTOMER":
-        raise OrderError("請先登入客戶帳號。")
+    is_guest_order = customer_user is None
+
+    if customer_user and customer_user["role"] != "CUSTOMER":
+        raise OrderError("此角色不能建立客戶訂單。")
 
     store = get_store_by_code(db, store_code)
 
@@ -554,8 +666,15 @@ def create_customer_order(
         raise OrderError("找不到商品或商品已下架。")
 
     qty = max(1, _int(qty, 1))
-    customer_name = _clean(customer_name) or customer_user["display_name"]
-    customer_phone = _clean(customer_phone) or customer_user["phone"]
+
+    user_display_name = _row_get(customer_user, "display_name", "") if customer_user else ""
+    user_phone = _row_get(customer_user, "phone", "") if customer_user else ""
+    user_email = _row_get(customer_user, "email", "") if customer_user else ""
+
+    customer_name = _clean(customer_name) or _clean(user_display_name)
+    customer_phone = _clean(customer_phone) or _clean(user_phone)
+    customer_email = normalize_customer_email(customer_email or user_email)
+
     delivery_address = _clean(delivery_address)
     floor_number = _clean(floor_number)
     address_note = _clean(address_note)
@@ -576,6 +695,9 @@ def create_customer_order(
     distance_band = _clean(distance_band) or "0-2KM"
     difficulty_flags = difficulty_flags or []
 
+    if not customer_name:
+        raise OrderError("請輸入姓名。")
+
     if not customer_phone:
         raise OrderError("請輸入電話。")
 
@@ -585,23 +707,23 @@ def create_customer_order(
     if not floor_number:
         raise OrderError("請輸入樓層，例如：1樓、5樓、無電梯。")
 
-    has_cum_bind = bool(customer_can_photo_proof(db, customer_user))
+    has_email = bool(customer_email)
+    has_line_bind = False
+
+    if customer_user:
+        try:
+            has_line_bind = bool(customer_can_photo_proof(db, customer_user))
+        except Exception:
+            has_line_bind = False
 
     payment_method = normalize_payment_method(payment_method)
     delivery_method = normalize_delivery_method(delivery_method)
 
-    if not has_cum_bind:
-        if delivery_method != "FACE_TO_FACE":
-            raise OrderError("尚未綁定 CUM LINE，只能選擇當面交付。")
+    if payment_method == "BANK_TRANSFER" and not has_email:
+        raise OrderError("請輸入有效 Email 後，才能使用轉帳付款。")
 
-        if payment_method != "COD":
-            raise OrderError("尚未綁定 CUM LINE，只能使用貨到付款。")
-
-    if delivery_method == "PHOTO_PROOF" and not has_cum_bind:
-        raise OrderError("尚未綁定 CUM LINE，只能選擇當面交付。")
-
-    if payment_method == "BANK_TRANSFER" and not has_cum_bind:
-        raise OrderError("尚未綁定 CUM LINE，只能使用貨到付款。")
+    if delivery_method == "PHOTO_PROOF" and not has_email:
+        raise OrderError("請輸入有效 Email 後，才能選擇拍照完成。")
 
     subtotal_twd = _money(product["price_twd"]) * qty
 
@@ -642,6 +764,7 @@ def create_customer_order(
     normalized_distance_band = delivery_fee.get("distance_band", distance_band)
 
     payment_status = "UNPAID"
+
     if payment_method == "BANK_TRANSFER":
         payment_status = "PENDING"
 
@@ -661,6 +784,21 @@ def create_customer_order(
 
     now = now_iso()
     order_code = unique_code(db, "orders", "order_code", generate_order_code)
+
+    if is_guest_order:
+        normalized_order_source = "GUEST_CHECKOUT"
+        guest_access_token = generate_guest_access_token(db)
+        customer_user_id = None
+        actor_role = "GUEST_CUSTOMER"
+        actor_id = None
+        actor_code = f"GUEST-{order_code}"
+    else:
+        normalized_order_source = _clean(order_source) or "CUSTOMER_MARKETPLACE"
+        guest_access_token = ""
+        customer_user_id = customer_user["id"]
+        actor_role = "CUSTOMER"
+        actor_id = customer_user["id"]
+        actor_code = f"CUS-{customer_user['id']}"
 
     cur = db.execute(
         """
@@ -693,6 +831,8 @@ def create_customer_order(
             difficulty_flags_json,
             customer_name,
             customer_phone,
+            customer_email,
+            guest_access_token,
             note,
             proof_image_url,
             invoice_required,
@@ -719,83 +859,127 @@ def create_customer_order(
             admin_hold,
             admin_hold_reason,
             admin_hold_at,
+            order_source,
             created_at,
             updated_at
         )
         VALUES (
-            ?, ?, ?, NULL, 'CREATED',
-            ?, ?, ?,
-            ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?,
+            :order_code,
+            :customer_user_id,
+            :store_id,
+            NULL,
+            'CREATED',
+            :payment_method,
+            :payment_status,
+            :delivery_method,
+            :subtotal_twd,
+            :delivery_fee_twd,
+            :base_delivery_fee_twd,
+            :customer_delivery_share_twd,
+            :store_delivery_support_twd,
+            :delivery_fee_rule_json,
+            :service_fee_twd,
+            :extra_fee_twd,
+            :rain_fee_twd,
+            :total_twd,
+            :delivery_address,
+            :delivery_lat,
+            :delivery_lng,
+            :distance_band,
+            :floor_number,
+            :address_note,
+            :extra_fee_reason,
+            :difficulty_flags_json,
+            :customer_name,
+            :customer_phone,
+            :customer_email,
+            :guest_access_token,
+            :note,
             '',
-            ?, ?, ?, ?, ?,
-            ?, ?, ?,
-            ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?,
+            :invoice_required,
+            :invoice_type,
+            :invoice_title,
+            :invoice_tax_id,
+            :invoice_note,
+            :city_block,
+            :area_label,
+            :smartroad_lane,
+            :distance_km,
+            :smartroad_score,
+            :smartroad_score_label,
+            :smartroad_reasons_json,
+            :smartroad_same_road,
+            :smartroad_same_side,
+            :smartroad_uturn_risk,
+            :store_road_name,
+            :customer_road_name,
+            :store_house_number,
+            :customer_house_number,
+            :store_house_parity,
+            :customer_house_parity,
             0,
             '',
             '',
-            ?, ?
+            :order_source,
+            :created_at,
+            :updated_at
         )
         """,
-        (
-            order_code,
-            customer_user["id"],
-            store["id"],
-            payment_method,
-            payment_status,
-            delivery_method,
-            subtotal_twd,
-            delivery_fee_twd,
-            base_delivery_fee_twd,
-            customer_delivery_share_twd,
-            store_delivery_support_twd,
-            delivery_fee_rule_json,
-            service_fee_twd,
-            extra_fee_twd,
-            rain_fee_twd,
-            total_twd,
-            delivery_address,
-            delivery_lat,
-            delivery_lng,
-            normalized_distance_band,
-            floor_number,
-            address_note,
-            extra["extra_fee_reason"],
-            extra["difficulty_flags_json"],
-            customer_name,
-            customer_phone,
-            note,
-            invoice_data["invoice_required"],
-            invoice_data["invoice_type"],
-            invoice_data["invoice_title"],
-            invoice_data["invoice_tax_id"],
-            invoice_data["invoice_note"],
-            city_block,
-            area_label,
-            smartroad["smartroad_lane"],
-            distance_km,
-            smartroad["smartroad_score"],
-            smartroad["smartroad_score_label"],
-            smartroad["smartroad_reasons_json"],
-            smartroad["smartroad_same_road"],
-            smartroad["smartroad_same_side"],
-            smartroad["smartroad_uturn_risk"],
-            smartroad["store_road_name"],
-            smartroad["customer_road_name"],
-            smartroad["store_house_number"],
-            smartroad["customer_house_number"],
-            smartroad["store_house_parity"],
-            smartroad["customer_house_parity"],
-            now,
-            now,
-        ),
+        {
+            "order_code": order_code,
+            "customer_user_id": customer_user_id,
+            "store_id": store["id"],
+            "payment_method": payment_method,
+            "payment_status": payment_status,
+            "delivery_method": delivery_method,
+            "subtotal_twd": subtotal_twd,
+            "delivery_fee_twd": delivery_fee_twd,
+            "base_delivery_fee_twd": base_delivery_fee_twd,
+            "customer_delivery_share_twd": customer_delivery_share_twd,
+            "store_delivery_support_twd": store_delivery_support_twd,
+            "delivery_fee_rule_json": delivery_fee_rule_json,
+            "service_fee_twd": service_fee_twd,
+            "extra_fee_twd": extra_fee_twd,
+            "rain_fee_twd": rain_fee_twd,
+            "total_twd": total_twd,
+            "delivery_address": delivery_address,
+            "delivery_lat": delivery_lat,
+            "delivery_lng": delivery_lng,
+            "distance_band": normalized_distance_band,
+            "floor_number": floor_number,
+            "address_note": address_note,
+            "extra_fee_reason": extra["extra_fee_reason"],
+            "difficulty_flags_json": extra["difficulty_flags_json"],
+            "customer_name": customer_name,
+            "customer_phone": customer_phone,
+            "customer_email": customer_email,
+            "guest_access_token": guest_access_token,
+            "note": note,
+            "invoice_required": invoice_data["invoice_required"],
+            "invoice_type": invoice_data["invoice_type"],
+            "invoice_title": invoice_data["invoice_title"],
+            "invoice_tax_id": invoice_data["invoice_tax_id"],
+            "invoice_note": invoice_data["invoice_note"],
+            "city_block": city_block,
+            "area_label": area_label,
+            "smartroad_lane": smartroad["smartroad_lane"],
+            "distance_km": distance_km,
+            "smartroad_score": smartroad["smartroad_score"],
+            "smartroad_score_label": smartroad["smartroad_score_label"],
+            "smartroad_reasons_json": smartroad["smartroad_reasons_json"],
+            "smartroad_same_road": smartroad["smartroad_same_road"],
+            "smartroad_same_side": smartroad["smartroad_same_side"],
+            "smartroad_uturn_risk": smartroad["smartroad_uturn_risk"],
+            "store_road_name": smartroad["store_road_name"],
+            "customer_road_name": smartroad["customer_road_name"],
+            "store_house_number": smartroad["store_house_number"],
+            "customer_house_number": smartroad["customer_house_number"],
+            "store_house_parity": smartroad["store_house_parity"],
+            "customer_house_parity": smartroad["customer_house_parity"],
+            "order_source": normalized_order_source,
+            "created_at": now,
+            "updated_at": now,
+        },
     )
 
     order_id = cur.lastrowid
@@ -827,15 +1011,25 @@ def create_customer_order(
     create_block(
         db,
         event_type="ORDER_CREATED",
-        actor_role="CUSTOMER",
-        actor_id=customer_user["id"],
-        actor_code=f"CUS-{customer_user['id']}",
+        actor_role=actor_role,
+        actor_id=actor_id,
+        actor_code=actor_code,
         order_id=order_id,
         order_code=order_code,
         previous_status="",
         new_status="CREATED",
         amount_twd=total_twd,
         payload={
+            "order_source": normalized_order_source,
+            "is_guest_order": is_guest_order,
+            "customer_user_id": customer_user_id,
+            "customer_name": customer_name,
+            "customer_phone": customer_phone,
+            "customer_email_saved": bool(customer_email),
+            "guest_tracking_enabled": bool(guest_access_token),
+            "email_primary_notification": bool(customer_email),
+            "line_optional_notification": bool(has_line_bind),
+            "has_line_bind": bool(has_line_bind),
             "store_code": store["store_code"],
             "store_name": store["store_name"],
             "business_hours_status": hours_status,
@@ -856,7 +1050,6 @@ def create_customer_order(
             "payment_method": payment_method,
             "payment_status": payment_status,
             "delivery_method": delivery_method,
-            "has_cum_bind": has_cum_bind,
             "invoice_required": invoice_data["invoice_required"],
             "invoice_type": invoice_data["invoice_type"],
             "invoice_title": invoice_data["invoice_title"],
@@ -873,14 +1066,14 @@ def create_customer_order(
             "city_block": city_block,
             "area_label": area_label,
             **_smartroad_block_payload(smartroad),
-            "note": "客戶建立訂單，系統自動送入店家訂單中心。轉帳單不需 Admin 預先核准；若付款異常，Admin 可暫停。",
+            "note": "客戶建立訂單，系統自動送入店家訂單中心。Email 為主要通知方式，LINE 綁定僅作為額外推播。",
         },
         commit=False,
     )
 
     db.commit()
 
-    push_to_role_target(
+    _safe_push_to_role_target(
         db,
         role="STORE",
         target_code=store["store_code"],
@@ -896,6 +1089,23 @@ def create_customer_order(
         ),
         commit=True,
     )
+
+    if customer_user and has_line_bind:
+        _safe_push_to_role_target(
+            db,
+            role="CUSTOMER",
+            target_code=f"CUS-{customer_user['id']}",
+            event_type="ORDER_CREATED",
+            order_code=order_code,
+            message=(
+                "FUMAP GO 訂單已建立\n"
+                f"訂單：{order_code}\n"
+                f"店家：{store['store_name']}\n"
+                f"金額：{total_twd} TWD\n"
+                "您可到我的訂單查看狀態。"
+            ),
+            commit=True,
+        )
 
     return get_order_by_code(db, order_code)
 
@@ -1007,7 +1217,7 @@ def store_call_driver(db, *, store, order_code, actor_user):
 
     db.commit()
 
-    push_to_role_target(
+    _safe_push_to_role_target(
         db,
         role="STORE",
         target_code=store["store_code"],
@@ -1023,6 +1233,7 @@ def store_call_driver(db, *, store, order_code, actor_user):
     )
 
     return get_order_by_code(db, order_code)
+
 
 def cancel_order(db, *, order_code, actor_role, actor_id=None, actor_code="", reason=""):
     order = get_order_by_code(db, order_code)
@@ -1108,7 +1319,6 @@ def normalize_store_manual_payment(value):
         "label": "貨到付款 COD",
         "note": "COD：Shiper 到店取貨時先向店家支付商品款，配送成功後向客戶收取 COD。",
     }
-
 
 def create_store_manual_delivery_order(
     db,
@@ -1276,6 +1486,8 @@ def create_store_manual_delivery_order(
             difficulty_flags_json,
             customer_name,
             customer_phone,
+            customer_email,
+            guest_access_token,
             note,
             proof_image_url,
             city_block,
@@ -1305,78 +1517,114 @@ def create_store_manual_delivery_order(
             updated_at
         )
         VALUES (
-            ?, NULL, ?, NULL,
+            :order_code,
+            NULL,
+            :store_id,
+            NULL,
             'WAITING_DRIVER',
-            ?, ?, ?,
-            ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?,
+            :payment_method,
+            :payment_status,
+            :delivery_method,
+            :subtotal_twd,
+            :delivery_fee_twd,
+            :base_delivery_fee_twd,
+            :customer_delivery_share_twd,
+            :store_delivery_support_twd,
+            :delivery_fee_rule_json,
+            :service_fee_twd,
+            :extra_fee_twd,
+            :rain_fee_twd,
+            :total_twd,
+            :delivery_address,
+            :delivery_lat,
+            :delivery_lng,
+            :distance_band,
+            :floor_number,
+            :address_note,
+            :extra_fee_reason,
+            :difficulty_flags_json,
+            :customer_name,
+            :customer_phone,
             '',
-            ?, ?, ?,
-            ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?,
+            '',
+            :note,
+            '',
+            :city_block,
+            :area_label,
+            :smartroad_lane,
+            :distance_km,
+            :smartroad_score,
+            :smartroad_score_label,
+            :smartroad_reasons_json,
+            :smartroad_same_road,
+            :smartroad_same_side,
+            :smartroad_uturn_risk,
+            :store_road_name,
+            :customer_road_name,
+            :store_house_number,
+            :customer_house_number,
+            :store_house_parity,
+            :customer_house_parity,
             0,
             '',
             '',
             'STORE_MANUAL',
-            ?, ?, ?,
-            ?, ?
+            :store_created_by,
+            :manual_order_title,
+            :prepaid_to,
+            :created_at,
+            :updated_at
         )
         """,
-        (
-            order_code,
-            store["id"],
-            payment_method,
-            payment_status,
-            delivery_method,
-            subtotal_twd,
-            delivery_fee_twd,
-            base_delivery_fee_twd,
-            customer_delivery_share_twd,
-            store_delivery_support_twd,
-            delivery_fee_rule_json,
-            service_fee_twd,
-            extra_fee_twd,
-            rain_fee_twd,
-            total_twd,
-            delivery_address,
-            delivery_lat,
-            delivery_lng,
-            normalized_distance_band,
-            floor_number,
-            address_note,
-            extra["extra_fee_reason"],
-            extra["difficulty_flags_json"],
-            customer_name,
-            customer_phone,
-            note,
-            city_block,
-            area_label,
-            smartroad["smartroad_lane"],
-            distance_km,
-            smartroad["smartroad_score"],
-            smartroad["smartroad_score_label"],
-            smartroad["smartroad_reasons_json"],
-            smartroad["smartroad_same_road"],
-            smartroad["smartroad_same_side"],
-            smartroad["smartroad_uturn_risk"],
-            smartroad["store_road_name"],
-            smartroad["customer_road_name"],
-            smartroad["store_house_number"],
-            smartroad["customer_house_number"],
-            smartroad["store_house_parity"],
-            smartroad["customer_house_parity"],
-            actor_user["id"],
-            manual_order_title,
-            prepaid_to,
-            now,
-            now,
-        ),
+        {
+            "order_code": order_code,
+            "store_id": store["id"],
+            "payment_method": payment_method,
+            "payment_status": payment_status,
+            "delivery_method": delivery_method,
+            "subtotal_twd": subtotal_twd,
+            "delivery_fee_twd": delivery_fee_twd,
+            "base_delivery_fee_twd": base_delivery_fee_twd,
+            "customer_delivery_share_twd": customer_delivery_share_twd,
+            "store_delivery_support_twd": store_delivery_support_twd,
+            "delivery_fee_rule_json": delivery_fee_rule_json,
+            "service_fee_twd": service_fee_twd,
+            "extra_fee_twd": extra_fee_twd,
+            "rain_fee_twd": rain_fee_twd,
+            "total_twd": total_twd,
+            "delivery_address": delivery_address,
+            "delivery_lat": delivery_lat,
+            "delivery_lng": delivery_lng,
+            "distance_band": normalized_distance_band,
+            "floor_number": floor_number,
+            "address_note": address_note,
+            "extra_fee_reason": extra["extra_fee_reason"],
+            "difficulty_flags_json": extra["difficulty_flags_json"],
+            "customer_name": customer_name,
+            "customer_phone": customer_phone,
+            "note": note,
+            "city_block": city_block,
+            "area_label": area_label,
+            "smartroad_lane": smartroad["smartroad_lane"],
+            "distance_km": distance_km,
+            "smartroad_score": smartroad["smartroad_score"],
+            "smartroad_score_label": smartroad["smartroad_score_label"],
+            "smartroad_reasons_json": smartroad["smartroad_reasons_json"],
+            "smartroad_same_road": smartroad["smartroad_same_road"],
+            "smartroad_same_side": smartroad["smartroad_same_side"],
+            "smartroad_uturn_risk": smartroad["smartroad_uturn_risk"],
+            "store_road_name": smartroad["store_road_name"],
+            "customer_road_name": smartroad["customer_road_name"],
+            "store_house_number": smartroad["store_house_number"],
+            "customer_house_number": smartroad["customer_house_number"],
+            "store_house_parity": smartroad["store_house_parity"],
+            "customer_house_parity": smartroad["customer_house_parity"],
+            "store_created_by": actor_user["id"],
+            "manual_order_title": manual_order_title,
+            "prepaid_to": prepaid_to,
+            "created_at": now,
+            "updated_at": now,
+        },
     )
 
     order_id = cur.lastrowid
@@ -1477,7 +1725,7 @@ def create_store_manual_delivery_order(
 
     db.commit()
 
-    push_to_role_target(
+    _safe_push_to_role_target(
         db,
         role="STORE",
         target_code=store["store_code"],
