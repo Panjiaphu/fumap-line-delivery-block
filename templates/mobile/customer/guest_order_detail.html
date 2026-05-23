@@ -1,0 +1,201 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}訪客訂單追蹤｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}請保留此頁連結，以便查看訂單狀態{% endblock %}
+
+{% block content %}
+<section class="card" style="background:#ecfdf5;border-color:#a7f3d0;">
+  <h2>訂單已建立</h2>
+  <p class="muted" style="line-height:1.8;">
+    這是訪客訂單追蹤頁。請保留此頁面連結，之後可用來查看訂單狀態。<br>
+    Email 是主要通知方式；若您之後有綁定 LINE，系統才會額外推播 LINE 通知。
+  </p>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <span class="badge ok">訪客訂單</span>
+    <span class="badge">Email 通知優先</span>
+    <span class="badge">LINE 非必要</span>
+  </div>
+</section>
+
+
+<section class="card">
+  <h2>訂單資訊</h2>
+
+  <div class="info-grid">
+    <div>
+      <span class="muted">訂單編號</span>
+      <b>{{ order.order_code }}</b>
+    </div>
+
+    <div>
+      <span class="muted">訂單狀態</span>
+      <b>{{ order.status }}</b>
+    </div>
+
+    <div>
+      <span class="muted">付款方式</span>
+      <b>{{ order.payment_method }}</b>
+    </div>
+
+    <div>
+      <span class="muted">付款狀態</span>
+      <b>{{ order.payment_status }}</b>
+    </div>
+
+    <div>
+      <span class="muted">交付方式</span>
+      <b>{{ order.delivery_method }}</b>
+    </div>
+
+    <div>
+      <span class="muted">總金額</span>
+      <b>{{ order.total_twd|twd }}</b>
+    </div>
+
+    <div>
+      <span class="muted">店家</span>
+      <b>{{ order.store_name or '-' }}</b>
+    </div>
+
+    <div>
+      <span class="muted">建立時間</span>
+      <b>{{ order.created_at or '-' }}</b>
+    </div>
+  </div>
+</section>
+
+
+<section class="card">
+  <h2>客戶資料</h2>
+  <p class="muted" style="line-height:1.8;">
+    姓名：{{ order.customer_name or '-' }}<br>
+    電話：{{ order.customer_phone or '-' }}<br>
+    Email：{{ order.customer_email or '-' }}<br>
+    收貨地址：{{ order.delivery_address or '-' }}<br>
+    樓層：{{ order.floor_number or '-' }}<br>
+    地址備註：{{ order.address_note or '-' }}
+  </p>
+</section>
+
+
+<section class="card">
+  <h2>商品明細</h2>
+
+  {% if selected_items %}
+    <div class="fee-preview-table">
+      {% for item in selected_items %}
+      <div>
+        <span>
+          {{ item.product_name }}
+          × {{ item.qty }}
+        </span>
+        <b>{{ item.line_total_twd|twd }}</b>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">目前沒有商品明細。</p>
+  {% endif %}
+</section>
+
+
+<section class="card">
+  <h2>費用明細</h2>
+
+  <div class="fee-preview-table">
+    <div>
+      <span>商品金額</span>
+      <b>{{ order.subtotal_twd|twd }}</b>
+    </div>
+
+    <div>
+      <span>客戶配送分攤</span>
+      <b>{{ order.customer_delivery_share_twd|twd }}</b>
+    </div>
+
+    <div>
+      <span>困難 / 雨天加價</span>
+      <b>{{ order.extra_fee_twd|twd }}</b>
+    </div>
+
+    <div>
+      <span>合計</span>
+      <b>{{ order.total_twd|twd }}</b>
+    </div>
+  </div>
+
+  <p class="muted" style="line-height:1.8;">
+    配送距離：{{ order.distance_band or '-' }}｜{{ order.distance_km or 0 }} km<br>
+    區域：{{ order.area_label or '-' }}
+  </p>
+</section>
+
+
+{% if order.payment_method == 'BANK_TRANSFER' %}
+<section class="card" style="background:#f0f9ff;border-color:#bfdbfe;">
+  <h2>轉帳付款狀態</h2>
+  <p class="muted" style="line-height:1.8;">
+    此訂單使用轉帳付款。Admin 確認付款前，訂單可能會暫停處理。<br>
+    付款狀態：<b>{{ order.payment_status }}</b><br>
+    付款證明狀態：<b>{{ order.payment_proof_status or 'WAITING_UPLOAD' }}</b>
+  </p>
+
+  {% if order.payment_proof_uploaded_at %}
+    <p class="muted">
+      付款證明上傳時間：{{ order.payment_proof_uploaded_at }}
+    </p>
+  {% endif %}
+
+  {% if platform_payment_info and platform_payment_info.line_admin_url %}
+    <a class="btn secondary" target="_blank" href="{{ platform_payment_info.line_admin_url }}">
+      聯絡 Admin 補交或確認付款
+    </a>
+  {% endif %}
+</section>
+{% endif %}
+
+
+<section class="card">
+  <h2>訂單紀錄</h2>
+
+  {% if selected_blocks %}
+    {% for block in selected_blocks %}
+      <section class="card" style="background:#f8fafc;border-color:#e2e8f0;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+          <div>
+            <b>{{ block.event_type }}</b>
+            <p class="muted" style="margin:6px 0 0 0;">
+              {{ block.previous_status or '-' }} → {{ block.new_status or '-' }}
+            </p>
+          </div>
+          <span class="badge">{{ block.created_at }}</span>
+        </div>
+      </section>
+    {% endfor %}
+  {% else %}
+    <p class="muted">目前沒有更多紀錄。</p>
+  {% endif %}
+</section>
+
+
+<section class="card">
+  <h2>下一步</h2>
+
+  {% if order.payment_method == 'COD' %}
+    <p class="muted" style="line-height:1.8;">
+      此訂單為 COD 貨到付款。店家接單後，Shiper 會依流程到店取貨並配送。
+    </p>
+  {% elif order.payment_method == 'BANK_TRANSFER' %}
+    <p class="muted" style="line-height:1.8;">
+      此訂單為轉帳付款。請確認您已完成轉帳並提供付款證明。Admin 確認後，店家才會開始處理。
+    </p>
+  {% else %}
+    <p class="muted" style="line-height:1.8;">
+      請持續查看此頁面，或依系統通知追蹤訂單狀態。
+    </p>
+  {% endif %}
+
+  <a class="btn secondary" href="/show">回店家列表</a>
+</section>
+{% endblock %}
