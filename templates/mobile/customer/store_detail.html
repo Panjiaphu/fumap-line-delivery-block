@@ -1,7 +1,7 @@
 {% extends "mobile/layout.html" %}
 
 {% block title %}{{ store.store_name }}｜{{ APP_NAME }}{% endblock %}
-{% block subtitle %}商品、店家資訊與下單{% endblock %}
+{% block subtitle %}商品、店家資訊與免註冊下單{% endblock %}
 
 {% block content %}
 {% set bh = store.business_hours_status if store.business_hours_status is defined else business_hours_status %}
@@ -47,16 +47,16 @@
       </div>
 
       <div>
-        <span class="muted">平台費</span>
-        <b>店家 5% / Shiper 5%</b>
+        <span class="muted">下單方式</span>
+        <b>免註冊可下單</b>
       </div>
     </div>
 
     <div class="store-meta-row">
-      <span>LINE 通知</span>
-      <span>SmartRoad</span>
-      <span>BlockFGO 留證</span>
+      <span>Email 主要通知</span>
+      <span>LINE 額外推播</span>
       <span>COD 貨到付款</span>
+      <span>BlockFGO 留證</span>
     </div>
   </div>
 </section>
@@ -106,6 +106,16 @@
       </p>
     </section>
   {% endif %}
+</section>
+
+
+<section class="card" style="background:#ecfdf5;border-color:#a7f3d0;">
+  <h2>免註冊下單說明</h2>
+  <p class="muted" style="line-height:1.8;">
+    客人不需要先註冊帳號，也可以直接建立訂單。<br>
+    Email 是主要通知方式；填寫有效 Email 後，可使用轉帳付款與拍照完成。<br>
+    LINE 綁定只是額外推播，不是下單、轉帳或拍照完成的必要條件。
+  </p>
 </section>
 
 
@@ -191,9 +201,10 @@
 
 <section class="card">
   <h2>下單前確認</h2>
-  <p class="muted">
-    Email 已驗證：可使用轉帳付款與上傳付款證明。<br>
-    LINE 綁定：可接收 LINE 通知，但不是下單必要條件。<br>
+  <p class="muted" style="line-height:1.8;">
+    免註冊即可下單。<br>
+    有效 Email：可使用轉帳付款、上傳付款證明與選擇拍照完成。<br>
+    LINE 綁定：只作為額外通知推播，不是必要條件。<br>
     COD 訂單：Shiper 到店取貨時會先向店家支付商品款，再向客戶收取 COD。<br>
     2樓以上、雨天、重物、偏遠或難找地點可能加收 20 TWD。
   </p>
