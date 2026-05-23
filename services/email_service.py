@@ -22,7 +22,8 @@ def _row_get(row, key, default=""):
 
     try:
         if key in row.keys():
-            return row[key]
+            value = row[key]
+            return default if value is None else value
     except Exception:
         pass
 
@@ -89,6 +90,29 @@ def smtp_is_configured():
 
 def normalize_email(email):
     return (email or "").strip().lower()
+
+
+def is_valid_email(email):
+    email = normalize_email(email)
+
+    if not email:
+        return False
+
+    if len(email) > 255:
+        return False
+
+    if "@" not in email:
+        return False
+
+    local, _, domain = email.partition("@")
+
+    if not local or not domain:
+        return False
+
+    if "." not in domain:
+        return False
+
+    return True
 
 
 def get_admin_notify_emails():
@@ -394,6 +418,20 @@ def send_email(
         )
         return False
 
+    if not is_valid_email(to_email):
+        log_email(
+            event_type=event_type,
+            recipient_email=to_email,
+            recipient_role=recipient_role,
+            user_id=user_id,
+            order_id=order_id,
+            order_code=order_code,
+            subject=subject,
+            status=EMAIL_STATUS_SKIPPED,
+            error_message="Invalid recipient email",
+        )
+        return False
+
     cfg = _smtp_config()
 
     if not smtp_is_configured():
@@ -630,7 +668,7 @@ def send_line_bind_success_email(
       之後重要通知會同時透過 Email 與 LINE 發送。
     </p>
     <p style="margin:0;color:#6B7280;">
-      LINE 綁定只用於通知，不是登入方式，也不會取代 Email 驗證。
+      LINE 綁定只用於通知，不是登入方式，也不會取代 Email。
     </p>
     """
 
@@ -656,7 +694,7 @@ def send_line_bind_success_email(
 帳號代碼：{target_code or '-'}
 LINE 名稱：{line_display_name or '-'}
 
-LINE 綁定只用於通知，不是登入方式，也不會取代 Email 驗證。
+LINE 綁定只用於通知，不是登入方式，也不會取代 Email。
 
 查看 LINE 綁定狀態：
 {absolute_url('/line/bind')}
@@ -678,12 +716,25 @@ fumapgo.com
 
 def _customer_order_url(order, order_url=None):
     order_code = _safe_str(_order_value(order, "order_code", ""))
-    return absolute_url(order_url or f"/orders?order_code={order_code}")
+    guest_token = _safe_str(_order_value(order, "guest_access_token", ""))
+
+    if order_url:
+        return absolute_url(order_url)
+
+    if guest_token:
+        return absolute_url(f"/guest/orders/{order_code}?token={guest_token}")
+
+    return absolute_url(f"/orders?order_code={order_code}")
 
 
 def _admin_order_url(order, review_url=None):
     order_code = _safe_str(_order_value(order, "order_code", ""))
     return absolute_url(review_url or f"/admin/orders?order_code={order_code}")
+
+
+def _store_order_url(order, store_url=None):
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    return absolute_url(store_url or f"/store/orders?order_code={order_code}")
 
 
 def _order_info_rows(order, extra_rows=None):
@@ -694,6 +745,7 @@ def _order_info_rows(order, extra_rows=None):
         or _order_value(order, "store_title", "")
     )
     customer_name = _safe_str(_order_value(order, "customer_name", ""))
+    customer_email = _safe_str(_order_value(order, "customer_email", ""))
     total_twd = _format_twd(_order_value(order, "total_twd", 0))
     payment_method = _safe_str(_order_value(order, "payment_method", ""))
     payment_status = _safe_str(_order_value(order, "payment_status", ""))
@@ -702,6 +754,7 @@ def _order_info_rows(order, extra_rows=None):
         ("訂單編號", order_code or "UNKNOWN"),
         ("店家名稱", store_name or "-"),
         ("客戶姓名", customer_name or "-"),
+        ("客戶 Email", customer_email or "-"),
         ("訂單金額", total_twd),
         ("付款方式", payment_method or "-"),
         ("付款狀態", payment_status or "-"),
@@ -712,6 +765,201 @@ def _order_info_rows(order, extra_rows=None):
 
     return rows
 
+
+def _send_to_admins(*, subject, html_body, text_body, event_type, order=None):
+    order_id = _order_value(order, "id", None)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    admin_emails = get_admin_notify_emails()
+
+    if not admin_emails:
+        log_email(
+            event_type=event_type,
+            recipient_email="",
+            recipient_role="ADMIN",
+            order_id=order_id,
+            order_code=order_code,
+            subject=subject,
+            status=EMAIL_STATUS_SKIPPED,
+            error_message="No admin notification email configured",
+        )
+        return False
+
+    sent_any = False
+    seen = set()
+
+    for admin_email in admin_emails:
+        admin_email = normalize_email(admin_email)
+
+        if not admin_email or admin_email in seen:
+            continue
+
+        seen.add(admin_email)
+
+        sent = send_email(
+            to_email=admin_email,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            event_type=event_type,
+            recipient_role="ADMIN",
+            order_id=order_id,
+            order_code=order_code,
+        )
+
+        if sent:
+            sent_any = True
+
+    return sent_any
+
+
+def send_customer_order_created_email(order, customer_email=None, order_url=None):
+    customer_email = normalize_email(
+        customer_email
+        or _order_value(order, "customer_email", "")
+    )
+
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    order_source = _safe_str(_order_value(order, "order_source", ""))
+    guest_token = _safe_str(_order_value(order, "guest_access_token", ""))
+
+    if not customer_email:
+        log_email(
+            event_type="CUSTOMER_ORDER_CREATED",
+            recipient_email="",
+            recipient_role="CUSTOMER",
+            user_id=_order_value(order, "customer_user_id", None),
+            order_id=order_id,
+            order_code=order_code,
+            subject=f"FUMAP GO｜訂單已建立｜{order_code or 'UNKNOWN'}",
+            status=EMAIL_STATUS_SKIPPED,
+            error_message="Missing customer email",
+        )
+        return False
+
+    final_order_url = _customer_order_url(order, order_url)
+
+    title = "訂單已建立"
+    subject = f"FUMAP GO｜訂單已建立｜{order_code or 'UNKNOWN'}"
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      您的 FUMAP GO 訂單已建立。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      Email 是主要通知方式。若您有綁定 LINE，系統會額外推播 LINE 通知。
+    </p>
+    """
+
+    if guest_token:
+        body_html += """
+        <p style="margin:0;color:#6B7280;">
+          此訂單為訪客訂單，請保留下方訂單追蹤連結。
+        </p>
+        """
+
+    html_body = render_branded_email(
+        title=title,
+        body_html=body_html,
+        button_text="查看訂單",
+        button_url=final_order_url,
+        info_rows=_order_info_rows(
+            order,
+            [
+                ("訂單來源", order_source or "-"),
+                ("通知方式", "Email 為主；LINE 為額外推播"),
+            ],
+        ),
+    )
+
+    text_body = f"""您好，
+
+您的 FUMAP GO 訂單已建立。
+Email 是主要通知方式。若您有綁定 LINE，系統會額外推播 LINE 通知。
+
+訂單編號：{order_code or 'UNKNOWN'}
+店家：{_safe_str(_order_value(order, 'store_name', '-')) or '-'}
+金額：{_format_twd(_order_value(order, 'total_twd', 0))}
+付款：{_safe_str(_order_value(order, 'payment_method', '-')) or '-'} / {_safe_str(_order_value(order, 'payment_status', '-')) or '-'}
+
+查看訂單：
+{final_order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=customer_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="CUSTOMER_ORDER_CREATED",
+        recipient_role="CUSTOMER",
+        user_id=_order_value(order, "customer_user_id", None),
+        order_id=order_id,
+        order_code=order_code,
+    )
+
+
+def send_admin_order_created_email(order, review_url=None):
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    admin_order_url = _admin_order_url(order, review_url)
+
+    subject = f"FUMAP GO｜新訂單已建立｜{order_code or 'UNKNOWN'}"
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">Admin 您好，</p>
+    <p style="margin:0 0 12px 0;">
+      系統收到一筆新的客戶訂單。
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      Email 是客戶主要通知方式；LINE 只作為額外推播，不應阻擋訂單建立。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="新訂單已建立",
+        body_html=body_html,
+        button_text="查看 Admin 訂單",
+        button_url=admin_order_url,
+        info_rows=_order_info_rows(
+            order,
+            [
+                ("訂單來源", _safe_str(_order_value(order, "order_source", "")) or "-"),
+                ("客戶電話", _safe_str(_order_value(order, "customer_phone", "")) or "-"),
+                ("配送地址", _safe_str(_order_value(order, "delivery_address", "")) or "-"),
+            ],
+        ),
+    )
+
+    text_body = f"""Admin 您好，
+
+系統收到一筆新的客戶訂單。
+
+訂單編號：{order_code or 'UNKNOWN'}
+客戶：{_safe_str(_order_value(order, 'customer_name', '-')) or '-'}
+電話：{_safe_str(_order_value(order, 'customer_phone', '-')) or '-'}
+Email：{_safe_str(_order_value(order, 'customer_email', '-')) or '-'}
+店家：{_safe_str(_order_value(order, 'store_name', '-')) or '-'}
+金額：{_format_twd(_order_value(order, 'total_twd', 0))}
+付款：{_safe_str(_order_value(order, 'payment_method', '-')) or '-'} / {_safe_str(_order_value(order, 'payment_status', '-')) or '-'}
+
+查看 Admin 訂單：
+{admin_order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return _send_to_admins(
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="ADMIN_ORDER_CREATED",
+        order=order,
+    )
 
 def send_customer_payment_proof_received_email(order, customer_email, order_url=None):
     customer_email = normalize_email(customer_email)
@@ -781,136 +1029,6 @@ fumapgo.com
         order_code=order_code,
     )
 
-def send_customer_payment_verified_email(order, customer_email, order_url=None):
-    customer_email = normalize_email(customer_email)
-    order_code = _safe_str(_order_value(order, "order_code", ""))
-    order_id = _order_value(order, "id", None)
-    verified_at = _safe_str(_order_value(order, "payment_verified_at", ""))
-
-    subject = f"FUMAP GO｜付款已確認｜{order_code or 'UNKNOWN'}"
-
-    extra_rows = [("確認結果", "付款已確認")]
-
-    if verified_at:
-        extra_rows.append(("確認時間", verified_at))
-
-    final_order_url = _customer_order_url(order, order_url)
-
-    body_html = """
-    <p style="margin:0 0 12px 0;">您好，</p>
-    <p style="margin:0 0 12px 0;">
-      您的轉帳付款已由 Admin 確認。
-    </p>
-    <p style="margin:0 0 12px 0;">
-      店家將依訂單流程開始處理，您可以在訂單頁查看最新狀態。
-    </p>
-    """
-
-    html_body = render_branded_email(
-        title="付款已確認",
-        body_html=body_html,
-        button_text="查看訂單",
-        button_url=final_order_url,
-        info_rows=_order_info_rows(order, extra_rows),
-    )
-
-    text_body = f"""您好，
-
-您的轉帳付款已由 Admin 確認。
-店家將依訂單流程開始處理，您可以在訂單頁查看最新狀態。
-
-訂單編號：{order_code or 'UNKNOWN'}
-確認時間：{verified_at or '-'}
-
-查看訂單：
-{final_order_url}
-
-FUMAP GO
-fumapgo.com
-"""
-
-    return send_email(
-        to_email=customer_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        event_type="CUSTOMER_PAYMENT_VERIFIED",
-        recipient_role="CUSTOMER",
-        user_id=_order_value(order, "customer_user_id", None),
-        order_id=order_id,
-        order_code=order_code,
-    )
-
-
-def send_customer_payment_rejected_email(order, customer_email, reason="", order_url=None):
-    customer_email = normalize_email(customer_email)
-    order_code = _safe_str(_order_value(order, "order_code", ""))
-    order_id = _order_value(order, "id", None)
-    rejected_at = _safe_str(_order_value(order, "payment_rejected_at", ""))
-    reject_reason = _safe_str(reason or _order_value(order, "payment_reject_reason", "")) or "轉帳付款證明需要重新確認"
-
-    subject = f"FUMAP GO｜轉帳證明需要重新確認｜{order_code or 'UNKNOWN'}"
-
-    extra_rows = [
-        ("確認結果", "需要重新確認"),
-        ("原因", reject_reason),
-    ]
-
-    if rejected_at:
-        extra_rows.append(("處理時間", rejected_at))
-
-    final_order_url = _customer_order_url(order, order_url)
-
-    body_html = f"""
-    <p style="margin:0 0 12px 0;">您好，</p>
-    <p style="margin:0 0 12px 0;">
-      您的轉帳付款證明需要重新確認。
-    </p>
-    <p style="margin:0 0 12px 0;">
-      原因：<b>{html.escape(reject_reason)}</b>
-    </p>
-    <p style="margin:0;color:#6B7280;">
-      請查看訂單狀態，必要時重新上傳付款證明或聯絡 Admin。
-    </p>
-    """
-
-    html_body = render_branded_email(
-        title="轉帳證明需要重新確認",
-        body_html=body_html,
-        button_text="查看訂單",
-        button_url=final_order_url,
-        info_rows=_order_info_rows(order, extra_rows),
-    )
-
-    text_body = f"""您好，
-
-您的轉帳付款證明需要重新確認。
-
-訂單編號：{order_code or 'UNKNOWN'}
-原因：{reject_reason}
-處理時間：{rejected_at or '-'}
-
-請查看訂單狀態，必要時重新上傳付款證明或聯絡 Admin。
-
-查看訂單：
-{final_order_url}
-
-FUMAP GO
-fumapgo.com
-"""
-
-    return send_email(
-        to_email=customer_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        event_type="CUSTOMER_PAYMENT_REJECTED",
-        recipient_role="CUSTOMER",
-        user_id=_order_value(order, "customer_user_id", None),
-        order_id=order_id,
-        order_code=order_code,
-    )
-
 
 def send_admin_payment_proof_uploaded_email(order, admin_emails=None, review_url=None, proof_url=None):
     order_code = _safe_str(_order_value(order, "order_code", ""))
@@ -920,16 +1038,8 @@ def send_admin_payment_proof_uploaded_email(order, admin_emails=None, review_url
 
     customer_name = _safe_str(_order_value(order, "customer_name", ""))
     customer_phone = _safe_str(_order_value(order, "customer_phone", ""))
-    customer_email = _safe_str(
-        _order_value(order, "customer_email", "")
-        or _order_value(order, "email", "")
-        or _order_value(order, "user_email", "")
-    )
-    store_name = _safe_str(
-        _order_value(order, "store_name", "")
-        or _order_value(order, "manual_order_title", "")
-        or _order_value(order, "store_title", "")
-    )
+    customer_email = _safe_str(_order_value(order, "customer_email", ""))
+    store_name = _safe_str(_order_value(order, "store_name", ""))
     total_twd = _format_twd(_order_value(order, "total_twd", 0))
     payment_method = _safe_str(_order_value(order, "payment_method", ""))
     payment_status = _safe_str(_order_value(order, "payment_status", ""))
@@ -964,7 +1074,7 @@ def send_admin_payment_proof_uploaded_email(order, admin_emails=None, review_url
       系統收到一筆新的轉帳付款證明，請至後台查看並確認付款。
     </p>
     <p style="margin:0;color:#6B7280;">
-      V1C 不會將圖片作為附件寄出，請在系統內查看，以降低隱私與寄送失敗風險。
+      V1 不會將圖片作為附件寄出，請在系統內查看，以降低隱私與寄送失敗風險。
     </p>
     """
 
@@ -1061,39 +1171,127 @@ def send_admin_payment_proof_email(order, proof_url=None, admin_order_url=None):
     )
 
 
-def send_customer_delivery_proof_email(order, customer_email, order_url=None):
+def send_customer_payment_verified_email(order, customer_email, order_url=None):
     customer_email = normalize_email(customer_email)
-
     order_code = _safe_str(_order_value(order, "order_code", ""))
     order_id = _order_value(order, "id", None)
+    verified_at = _safe_str(_order_value(order, "payment_verified_at", ""))
+
+    subject = f"FUMAP GO｜付款已確認｜{order_code or 'UNKNOWN'}"
+    final_order_url = _customer_order_url(order, order_url)
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      您的轉帳付款已由 Admin 確認。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      店家將依訂單流程開始處理，您可以在訂單頁查看最新狀態。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="付款已確認",
+        body_html=body_html,
+        button_text="查看訂單",
+        button_url=final_order_url,
+        info_rows=_order_info_rows(order, [("確認時間", verified_at or "-")]),
+    )
+
+    text_body = f"""您好，
+
+您的轉帳付款已由 Admin 確認。
+店家將依訂單流程開始處理，您可以在訂單頁查看最新狀態。
+
+訂單編號：{order_code or 'UNKNOWN'}
+確認時間：{verified_at or '-'}
+
+查看訂單：
+{final_order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=customer_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="CUSTOMER_PAYMENT_VERIFIED",
+        recipient_role="CUSTOMER",
+        user_id=_order_value(order, "customer_user_id", None),
+        order_id=order_id,
+        order_code=order_code,
+    )
+
+
+def send_customer_payment_rejected_email(order, customer_email, reason="", order_url=None):
+    customer_email = normalize_email(customer_email)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    reject_reason = _safe_str(reason or _order_value(order, "payment_reject_reason", "")) or "轉帳付款證明需要重新確認"
+    final_order_url = _customer_order_url(order, order_url)
+
+    subject = f"FUMAP GO｜轉帳證明需要重新確認｜{order_code or 'UNKNOWN'}"
+
+    body_html = f"""
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      您的轉帳付款證明需要重新確認。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      原因：<b>{html.escape(reject_reason)}</b>
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      請查看訂單狀態，必要時重新上傳付款證明或聯絡 Admin。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="轉帳證明需要重新確認",
+        body_html=body_html,
+        button_text="查看訂單",
+        button_url=final_order_url,
+        info_rows=_order_info_rows(order, [("原因", reject_reason)]),
+    )
+
+    text_body = f"""您好，
+
+您的轉帳付款證明需要重新確認。
+
+訂單編號：{order_code or 'UNKNOWN'}
+原因：{reject_reason}
+
+請查看訂單狀態，必要時重新上傳付款證明或聯絡 Admin。
+
+查看訂單：
+{final_order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=customer_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="CUSTOMER_PAYMENT_REJECTED",
+        recipient_role="CUSTOMER",
+        user_id=_order_value(order, "customer_user_id", None),
+        order_id=order_id,
+        order_code=order_code,
+    )
+
+
+def send_customer_delivery_proof_email(order, customer_email, order_url=None):
+    customer_email = normalize_email(customer_email)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    final_order_url = _customer_order_url(order, order_url)
 
     subject = f"FUMAP GO｜訂單已送達｜{order_code or 'UNKNOWN'}"
-
-    store_name = _safe_str(
-        _order_value(order, "store_name", "")
-        or _order_value(order, "manual_order_title", "")
-        or _order_value(order, "store_title", "")
-    )
-    delivered_at = _safe_str(
-        _order_value(order, "delivery_proof_uploaded_at", "")
-        or _order_value(order, "updated_at", "")
-    )
-    status = _safe_str(_order_value(order, "status", "DELIVERED"))
-    payment_method = _safe_str(_order_value(order, "payment_method", ""))
-    payment_status = _safe_str(_order_value(order, "payment_status", ""))
-
-    order_url = absolute_url(order_url or f"/orders?order_code={order_code}")
-
-    info_rows = [
-        ("訂單編號", order_code or "UNKNOWN"),
-        ("店家名稱", store_name or "-"),
-        ("配送狀態", status or "DELIVERED"),
-        ("付款方式", payment_method or "-"),
-        ("付款狀態", payment_status or "-"),
-    ]
-
-    if delivered_at:
-        info_rows.append(("送達時間", delivered_at))
 
     body_html = """
     <p style="margin:0 0 12px 0;">您好，</p>
@@ -1109,8 +1307,8 @@ def send_customer_delivery_proof_email(order, customer_email, order_url=None):
         title="訂單已送達",
         body_html=body_html,
         button_text="查看訂單狀態",
-        button_url=order_url,
-        info_rows=info_rows,
+        button_url=final_order_url,
+        info_rows=_order_info_rows(order),
     )
 
     text_body = f"""您好，
@@ -1118,17 +1316,11 @@ def send_customer_delivery_proof_email(order, customer_email, order_url=None):
 您的 FUMAP GO 訂單已送達。
 
 訂單編號：{order_code or 'UNKNOWN'}
-店家名稱：{store_name or '-'}
-配送狀態：{status or 'DELIVERED'}
-付款方式：{payment_method or '-'}
-付款狀態：{payment_status or '-'}
-送達時間：{delivered_at or '-'}
+店家：{_safe_str(_order_value(order, 'store_name', '-')) or '-'}
+狀態：{_safe_str(_order_value(order, 'status', '-')) or '-'}
 
 查看訂單狀態：
-{order_url}
-
-若有配送證明，系統會保存於訂單紀錄中。
-為了保護隱私，V1 不會將圖片作為附件寄出。
+{final_order_url}
 
 FUMAP GO
 fumapgo.com
@@ -1139,383 +1331,9 @@ fumapgo.com
         subject=subject,
         html_body=html_body,
         text_body=text_body,
-        event_type="ORDER_DELIVERED_EMAIL",
+        event_type="CUSTOMER_DELIVERY_PROOF",
         recipient_role="CUSTOMER",
+        user_id=_order_value(order, "customer_user_id", None),
         order_id=order_id,
         order_code=order_code,
-    )
-
-def _settlement_value(settlement, key, default=""):
-    if settlement is None:
-        return default
-
-    try:
-        if key in settlement.keys():
-            value = settlement[key]
-            return default if value is None else value
-    except Exception:
-        pass
-
-    try:
-        value = settlement.get(key, default)
-        return default if value is None else value
-    except Exception:
-        return default
-
-
-def _settlement_url():
-    return absolute_url("/admin/settlements")
-
-
-def _target_email(target):
-    return normalize_email(
-        _row_get(target, "email", "")
-        or _row_get(target, "target_email", "")
-    )
-
-
-def _target_user_id(target):
-    return _row_get(target, "user_id", None) or _row_get(target, "target_user_id", None)
-
-
-def _target_display_name(target, role):
-    role = _safe_str(role).upper()
-
-    if role == "STORE":
-        return (
-            _safe_str(_row_get(target, "store_name", ""))
-            or _safe_str(_row_get(target, "display_name", ""))
-            or _safe_str(_row_get(target, "target_code", ""))
-            or "店家"
-        )
-
-    if role == "DRIVER":
-        return (
-            _safe_str(_row_get(target, "driver_name", ""))
-            or _safe_str(_row_get(target, "display_name", ""))
-            or _safe_str(_row_get(target, "target_code", ""))
-            or "Shiper"
-        )
-
-    return _safe_str(_row_get(target, "display_name", "")) or "FUMAP GO 用戶"
-
-
-def _admin_payment_info_rows(admin_payment_info):
-    admin_payment_info = admin_payment_info or {}
-
-    return [
-        ("Admin 收款銀行", admin_payment_info.get("bank_name") or "-"),
-        ("銀行代碼", admin_payment_info.get("bank_code") or "-"),
-        ("銀行帳號", admin_payment_info.get("bank_account") or "-"),
-        ("轉帳備註", admin_payment_info.get("bank_note") or "-"),
-        ("LINE Pay 名稱", admin_payment_info.get("linepay_name") or "-"),
-    ]
-
-
-def _payout_info_rows(payout_info):
-    payout_info = payout_info or {}
-
-    return [
-        ("收款戶名", payout_info.get("payout_account_name") or "-"),
-        ("銀行名稱", payout_info.get("payout_bank_name") or "-"),
-        ("銀行代碼", payout_info.get("payout_bank_code") or "-"),
-        ("銀行帳號", payout_info.get("payout_bank_account") or "-"),
-        ("備註", payout_info.get("payout_note") or "-"),
-    ]
-
-
-def _settlement_basic_rows(settlement):
-    settlement_code = _safe_str(_settlement_value(settlement, "settlement_code", ""))
-    period_start = _safe_str(_settlement_value(settlement, "period_start", ""))
-    period_end = _safe_str(_settlement_value(settlement, "period_end", ""))
-    amount_twd = _format_twd(_settlement_value(settlement, "amount_twd", 0))
-    status = _safe_str(_settlement_value(settlement, "status", ""))
-
-    return [
-        ("結算單號", settlement_code or "-"),
-        ("結算期間", f"{period_start or '-'} ~ {period_end or '-'}"),
-        ("結算金額", amount_twd),
-        ("狀態", status or "-"),
-    ]
-
-
-def send_store_payment_request_email(store, settlement, admin_payment_info):
-    to_email = _target_email(store)
-    store_name = _target_display_name(store, "STORE")
-    settlement_code = _safe_str(_settlement_value(settlement, "settlement_code", ""))
-    amount_twd = _format_twd(_settlement_value(settlement, "amount_twd", 0))
-    user_id = _target_user_id(store)
-
-    subject = f"FUMAP GO｜店家平台費結算通知｜{settlement_code or 'SETTLEMENT'}"
-
-    body_html = f"""
-    <p style="margin:0 0 12px 0;">{html.escape(store_name)} 您好，</p>
-    <p style="margin:0 0 12px 0;">
-      這是 FUMAP GO 店家平台費結算通知。
-    </p>
-    <p style="margin:0 0 12px 0;">
-      本次店家需支付 Admin 的平台費為：
-      <b>{html.escape(amount_twd)}</b>
-    </p>
-    <p style="margin:0 0 12px 0;">
-      請依下方 Admin 收款帳戶完成轉帳。完成後請通知 Admin，由 Admin 在系統確認收款。
-    </p>
-    <p style="margin:0;color:#6B7280;">
-      此為內部結算通知，不會自動扣款，也不代表銀行已完成交易。
-    </p>
-    """
-
-    info_rows = []
-    info_rows.extend(_settlement_basic_rows(settlement))
-    info_rows.extend(_admin_payment_info_rows(admin_payment_info))
-
-    html_body = render_branded_email(
-        title="店家平台費結算通知",
-        body_html=body_html,
-        button_text="查看 Admin 結算頁",
-        button_url=_settlement_url(),
-        info_rows=info_rows,
-    )
-
-    text_body = f"""您好，
-
-這是 FUMAP GO 店家平台費結算通知。
-
-店家：{store_name}
-結算單號：{settlement_code or '-'}
-結算金額：{amount_twd}
-
-請依下方 Admin 收款帳戶完成轉帳。完成後請通知 Admin，由 Admin 在系統確認收款。
-
-Admin 收款帳戶：
-銀行名稱：{admin_payment_info.get('bank_name') or '-'}
-銀行代碼：{admin_payment_info.get('bank_code') or '-'}
-銀行帳號：{admin_payment_info.get('bank_account') or '-'}
-轉帳備註：{admin_payment_info.get('bank_note') or '-'}
-
-此為內部結算通知，不會自動扣款，也不代表銀行已完成交易。
-
-FUMAP GO
-fumapgo.com
-"""
-
-    return send_email(
-        to_email=to_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        event_type="STORE_SETTLEMENT_PAYMENT_REQUEST",
-        recipient_role="STORE",
-        user_id=user_id,
-    )
-
-
-def send_driver_payment_request_email(driver, settlement, admin_payment_info):
-    to_email = _target_email(driver)
-    driver_name = _target_display_name(driver, "DRIVER")
-    settlement_code = _safe_str(_settlement_value(settlement, "settlement_code", ""))
-    amount_twd = _format_twd(_settlement_value(settlement, "amount_twd", 0))
-    user_id = _target_user_id(driver)
-
-    subject = f"FUMAP GO｜Shiper 平台費結算通知｜{settlement_code or 'SETTLEMENT'}"
-
-    body_html = f"""
-    <p style="margin:0 0 12px 0;">{html.escape(driver_name)} 您好，</p>
-    <p style="margin:0 0 12px 0;">
-      這是 FUMAP GO Shiper 平台費結算通知。
-    </p>
-    <p style="margin:0 0 12px 0;">
-      本次 Shiper 需支付 Admin 的平台費為：
-      <b>{html.escape(amount_twd)}</b>
-    </p>
-    <p style="margin:0 0 12px 0;">
-      請依下方 Admin 收款帳戶完成轉帳。完成後請通知 Admin，由 Admin 在系統確認收款。
-    </p>
-    <p style="margin:0;color:#6B7280;">
-      Shiper 只結算自己的平台費，不代收店家平台費。
-    </p>
-    """
-
-    info_rows = []
-    info_rows.extend(_settlement_basic_rows(settlement))
-    info_rows.extend(_admin_payment_info_rows(admin_payment_info))
-
-    html_body = render_branded_email(
-        title="Shiper 平台費結算通知",
-        body_html=body_html,
-        button_text="查看 Admin 結算頁",
-        button_url=_settlement_url(),
-        info_rows=info_rows,
-    )
-
-    text_body = f"""您好，
-
-這是 FUMAP GO Shiper 平台費結算通知。
-
-Shiper：{driver_name}
-結算單號：{settlement_code or '-'}
-結算金額：{amount_twd}
-
-請依下方 Admin 收款帳戶完成轉帳。完成後請通知 Admin，由 Admin 在系統確認收款。
-
-Admin 收款帳戶：
-銀行名稱：{admin_payment_info.get('bank_name') or '-'}
-銀行代碼：{admin_payment_info.get('bank_code') or '-'}
-銀行帳號：{admin_payment_info.get('bank_account') or '-'}
-轉帳備註：{admin_payment_info.get('bank_note') or '-'}
-
-Shiper 只結算自己的平台費，不代收店家平台費。
-
-FUMAP GO
-fumapgo.com
-"""
-
-    return send_email(
-        to_email=to_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        event_type="DRIVER_SETTLEMENT_PAYMENT_REQUEST",
-        recipient_role="DRIVER",
-        user_id=user_id,
-    )
-
-
-def send_store_payout_confirmed_email(store, settlement):
-    to_email = _target_email(store)
-    store_name = _target_display_name(store, "STORE")
-    settlement_code = _safe_str(_settlement_value(settlement, "settlement_code", ""))
-    amount_twd = _format_twd(_settlement_value(settlement, "amount_twd", 0))
-    confirmed_at = _safe_str(_settlement_value(settlement, "paid_confirmed_at", ""))
-    user_id = _target_user_id(store)
-
-    payout_info = _settlement_value(settlement, "target_payout_snapshot", None) or {}
-
-    if isinstance(payout_info, str):
-        payout_info = {}
-
-    subject = f"FUMAP GO｜Admin 已完成店家撥款｜{settlement_code or 'SETTLEMENT'}"
-
-    body_html = f"""
-    <p style="margin:0 0 12px 0;">{html.escape(store_name)} 您好，</p>
-    <p style="margin:0 0 12px 0;">
-      Admin 已在系統確認本次店家撥款完成。
-    </p>
-    <p style="margin:0 0 12px 0;">
-      本次撥款金額為：<b>{html.escape(amount_twd)}</b>
-    </p>
-    <p style="margin:0;color:#6B7280;">
-      請確認您的收款帳戶是否已收到款項。如有疑問，請聯絡 Admin。
-    </p>
-    """
-
-    info_rows = []
-    info_rows.extend(_settlement_basic_rows(settlement))
-
-    if confirmed_at:
-        info_rows.append(("確認時間", confirmed_at))
-
-    info_rows.extend(_payout_info_rows(payout_info))
-
-    html_body = render_branded_email(
-        title="Admin 已完成店家撥款",
-        body_html=body_html,
-        button_text="查看店家對帳",
-        button_url="/store/accounting",
-        info_rows=info_rows,
-    )
-
-    text_body = f"""您好，
-
-Admin 已在系統確認本次店家撥款完成。
-
-店家：{store_name}
-結算單號：{settlement_code or '-'}
-撥款金額：{amount_twd}
-確認時間：{confirmed_at or '-'}
-
-請確認您的收款帳戶是否已收到款項。如有疑問，請聯絡 Admin。
-
-FUMAP GO
-fumapgo.com
-"""
-
-    return send_email(
-        to_email=to_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        event_type="STORE_PAYOUT_CONFIRMED",
-        recipient_role="STORE",
-        user_id=user_id,
-    )
-
-
-def send_driver_payout_confirmed_email(driver, settlement):
-    to_email = _target_email(driver)
-    driver_name = _target_display_name(driver, "DRIVER")
-    settlement_code = _safe_str(_settlement_value(settlement, "settlement_code", ""))
-    amount_twd = _format_twd(_settlement_value(settlement, "amount_twd", 0))
-    confirmed_at = _safe_str(_settlement_value(settlement, "paid_confirmed_at", ""))
-    user_id = _target_user_id(driver)
-
-    payout_info = _settlement_value(settlement, "target_payout_snapshot", None) or {}
-
-    if isinstance(payout_info, str):
-        payout_info = {}
-
-    subject = f"FUMAP GO｜Admin 已完成 Shiper 撥款｜{settlement_code or 'SETTLEMENT'}"
-
-    body_html = f"""
-    <p style="margin:0 0 12px 0;">{html.escape(driver_name)} 您好，</p>
-    <p style="margin:0 0 12px 0;">
-      Admin 已在系統確認本次 Shiper 撥款完成。
-    </p>
-    <p style="margin:0 0 12px 0;">
-      本次撥款金額為：<b>{html.escape(amount_twd)}</b>
-    </p>
-    <p style="margin:0;color:#6B7280;">
-      請確認您的收款帳戶是否已收到款項。如有疑問，請聯絡 Admin。
-    </p>
-    """
-
-    info_rows = []
-    info_rows.extend(_settlement_basic_rows(settlement))
-
-    if confirmed_at:
-        info_rows.append(("確認時間", confirmed_at))
-
-    info_rows.extend(_payout_info_rows(payout_info))
-
-    html_body = render_branded_email(
-        title="Admin 已完成 Shiper 撥款",
-        body_html=body_html,
-        button_text="查看 Shiper 對帳",
-        button_url="/driver/accounting",
-        info_rows=info_rows,
-    )
-
-    text_body = f"""您好，
-
-Admin 已在系統確認本次 Shiper 撥款完成。
-
-Shiper：{driver_name}
-結算單號：{settlement_code or '-'}
-撥款金額：{amount_twd}
-確認時間：{confirmed_at or '-'}
-
-請確認您的收款帳戶是否已收到款項。如有疑問，請聯絡 Admin。
-
-FUMAP GO
-fumapgo.com
-"""
-
-    return send_email(
-        to_email=to_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        event_type="DRIVER_PAYOUT_CONFIRMED",
-        recipient_role="DRIVER",
-        user_id=user_id,
     )
