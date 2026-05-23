@@ -1,4 +1,5 @@
-from flask import Blueprint, render_template, current_app, jsonify
+from flask import Blueprint, render_template, current_app, jsonify, request
+
 from db import get_db
 from services.order_service import list_public_stores
 
@@ -14,11 +15,13 @@ def home():
 @public_bp.get("/show")
 def show():
     db = get_db()
-    stores = list_public_stores(db)
+    city_block = request.args.get("city_block", "").strip().upper() or None
+    stores = list_public_stores(db, city_block=city_block)
 
     return render_template(
         "mobile/customer/marketplace.html",
         stores=stores,
+        selected_city_block=city_block or "",
     )
 
 
