@@ -10,7 +10,6 @@ from services.order_service import (
     get_guest_order_by_code_token,
     get_order_items,
     list_customer_orders,
-    list_public_stores,
     list_store_products,
     normalize_customer_email,
 )
@@ -149,13 +148,6 @@ def _safe_push_line(db, **kwargs):
 
 
 def _notify_customer_payment_proof_received(db, *, order, user=None, customer_email=""):
-    """
-    Notify customer after payment proof upload.
-
-    Email is primary.
-    LINE is optional if customer has LINE bind.
-    Notification failure must not rollback proof/order.
-    """
     order_code = _safe_text(_row_get(order, "order_code", ""))
     guest_access_token = _safe_text(_row_get(order, "guest_access_token", ""))
 
@@ -198,13 +190,6 @@ def _notify_customer_payment_proof_received(db, *, order, user=None, customer_em
 
 
 def _notify_admin_payment_proof_uploaded(db, *, order, proof_url=None):
-    """
-    Notify admin after customer uploads payment proof.
-
-    Admin email is primary.
-    Admin LINE is optional.
-    Notification failure must not rollback proof/order.
-    """
     order_code = _safe_text(_row_get(order, "order_code", ""))
 
     try:
@@ -235,15 +220,8 @@ def _notify_admin_payment_proof_uploaded(db, *, order, proof_url=None):
     except Exception as exc:
         print(f"[PAYMENT_PROOF][LINE][ADMIN][ERROR] {exc}")
 
-
 def _apply_bank_transfer_pending(db, *, order, proof_url="", uploaded_at=""):
-    """
-    Mark BANK_TRANSFER order as pending Admin review.
-
-    Store should not process this order until Admin confirms payment.
-    """
     now = now_iso()
-
     payment_proof_status = "PENDING_REVIEW" if proof_url else "WAITING_UPLOAD"
 
     db.execute(
@@ -362,7 +340,6 @@ def checkout(store_code):
     db = get_db()
     user = current_user()
     is_logged_customer = _is_logged_customer(user)
-
     customer_user = user if is_logged_customer else None
 
     store = get_store_by_code(db, store_code)
@@ -505,11 +482,6 @@ def checkout(store_code):
                         "email_primary_notification": bool(submitted_customer_email),
                         "line_optional_notification": bool(has_cum_bind),
                         "has_line_bind": bool(has_cum_bind),
-                        "invoice_required": int(order["invoice_required"] or 0),
-                        "invoice_type": order["invoice_type"] or "NONE",
-                        "invoice_title": order["invoice_title"] or "",
-                        "invoice_tax_id": order["invoice_tax_id"] or "",
-                        "invoice_note": order["invoice_note"] or "",
                     },
                     commit=False,
                 )
@@ -608,9 +580,7 @@ def checkout(store_code):
 @customer_bp.get("/guest/orders/<order_code>")
 def guest_order_detail(order_code):
     db = get_db()
-
     token = request.args.get("token", "").strip()
-
     order = get_guest_order_by_code_token(db, order_code, token)
 
     if not order:
@@ -671,6 +641,7 @@ def customer_orders():
         email_verified=_user_email_verified(user),
     )
 
+
 @customer_bp.post("/customer/orders/<order_code>/payment-proof")
 @login_required
 @role_required("CUSTOMER")
@@ -710,15 +681,8 @@ def upload_payment_proof(order_code):
 
     try:
         now = now_iso()
-
         proof_url = _save_payment_proof_file(file, order_code)
-
-        previous_proof_status = ""
-
-        try:
-            previous_proof_status = order["payment_proof_status"] or ""
-        except Exception:
-            previous_proof_status = ""
+        previous_proof_status = _row_get(order, "payment_proof_status", "")
 
         db.execute(
             """
