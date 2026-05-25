@@ -1060,6 +1060,218 @@ def send_admin_payment_proof_email(order, proof_url=None, admin_order_url=None):
         proof_url=proof_url,
     )
 
+def _returned_to_store_common_rows(order):
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    store_name = _safe_str(
+        _order_value(order, "store_name", "")
+        or _order_value(order, "manual_order_title", "")
+        or _order_value(order, "store_title", "")
+    )
+
+    rows = [
+        ("訂單編號", order_code or "UNKNOWN"),
+        ("店家名稱", store_name or "-"),
+        ("目前狀態", _safe_str(_order_value(order, "status", "RETURNED_TO_STORE")) or "RETURNED_TO_STORE"),
+        ("付款方式", _safe_str(_order_value(order, "payment_method", "")) or "-"),
+        ("付款狀態", _safe_str(_order_value(order, "payment_status", "")) or "-"),
+        ("訂單金額", _format_twd(_order_value(order, "total_twd", 0))),
+    ]
+
+    returned_at = _safe_str(
+        _order_value(order, "return_proof_uploaded_at", "")
+        or _order_value(order, "updated_at", "")
+    )
+
+    if returned_at:
+        rows.append(("退回確認時間", returned_at))
+
+    return rows
+
+
+def send_customer_returned_to_store_email(order, customer_email, order_url=None):
+    customer_email = normalize_email(customer_email)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    order_url = absolute_url(order_url or f"/orders?order_code={order_code}")
+
+    subject = f"FUMAP GO｜訂單已退回店家處理｜{order_code or 'UNKNOWN'}"
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      您的訂單因配送異常，Shiper 已將商品退回店家。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      後續退款、重新配送或爭議處理，會由店家與 Admin 依系統紀錄確認。
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      系統已保存退回證明圖片。為了保護隱私，Email 不會附加圖片檔案。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="訂單已退回店家處理",
+        body_html=body_html,
+        button_text="查看訂單狀態",
+        button_url=order_url,
+        info_rows=_returned_to_store_common_rows(order),
+    )
+
+    text_body = f"""您好，
+
+您的 FUMAP GO 訂單因配送異常，Shiper 已將商品退回店家。
+
+訂單編號：{order_code or 'UNKNOWN'}
+目前狀態：RETURNED_TO_STORE
+
+後續退款、重新配送或爭議處理，會由店家與 Admin 依系統紀錄確認。
+
+查看訂單狀態：
+{order_url}
+
+系統已保存退回證明圖片。為了保護隱私，Email 不會附加圖片檔案。
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=customer_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="RETURNED_TO_STORE_CUSTOMER_EMAIL",
+        recipient_role="CUSTOMER",
+        order_id=order_id,
+        order_code=order_code,
+    )
+
+
+def send_store_returned_to_store_email(order, store_email, order_url=None):
+    store_email = normalize_email(store_email)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    order_url = absolute_url(order_url or f"/store/orders/{order_code}")
+
+    subject = f"FUMAP GO｜商品已退回店家｜{order_code or 'UNKNOWN'}"
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      此訂單已進入退回店家完成狀態。Shiper 已確認商品退回，系統已保存退回證明。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      請依實際情況與 Admin 確認後續對帳、退款、補送或爭議處理。
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      Email 不會附加圖片檔案，請登入系統查看訂單與證明紀錄。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="商品已退回店家",
+        body_html=body_html,
+        button_text="查看店家訂單",
+        button_url=order_url,
+        info_rows=_returned_to_store_common_rows(order),
+    )
+
+    text_body = f"""您好，
+
+此訂單已進入退回店家完成狀態。Shiper 已確認商品退回，系統已保存退回證明。
+
+訂單編號：{order_code or 'UNKNOWN'}
+目前狀態：RETURNED_TO_STORE
+
+請依實際情況與 Admin 確認後續對帳、退款、補送或爭議處理。
+
+查看店家訂單：
+{order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=store_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="RETURNED_TO_STORE_STORE_EMAIL",
+        recipient_role="STORE",
+        order_id=order_id,
+        order_code=order_code,
+    )
+
+
+def send_admin_returned_to_store_email(order, admin_emails=None, admin_order_url=None):
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    admin_order_url = absolute_url(admin_order_url or f"/admin/orders/{order_code}")
+
+    if admin_emails is None:
+        admin_emails = get_admin_notify_emails()
+
+    if isinstance(admin_emails, str):
+        admin_emails = [admin_emails]
+
+    subject = f"FUMAP GO｜退回店家待處理｜{order_code or 'UNKNOWN'}"
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">Admin 您好，</p>
+    <p style="margin:0 0 12px 0;">
+      此訂單已由 Shiper 確認退回店家。請檢查退回證明、付款狀態與後續對帳 / 退款 / 爭議處理。
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      退回證明圖片已保存於系統，不會作為 Email 附件寄出。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="退回店家待 Admin 處理",
+        body_html=body_html,
+        button_text="查看 Admin 訂單",
+        button_url=admin_order_url,
+        info_rows=_returned_to_store_common_rows(order),
+    )
+
+    text_body = f"""Admin 您好，
+
+此訂單已由 Shiper 確認退回店家。請檢查退回證明、付款狀態與後續對帳 / 退款 / 爭議處理。
+
+訂單編號：{order_code or 'UNKNOWN'}
+目前狀態：RETURNED_TO_STORE
+
+查看 Admin 訂單：
+{admin_order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    sent_any = False
+
+    for email in admin_emails or []:
+        email = normalize_email(email)
+
+        if not email:
+            continue
+
+        sent = send_email(
+            to_email=email,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            event_type="RETURNED_TO_STORE_ADMIN_EMAIL",
+            recipient_role="ADMIN",
+            order_id=order_id,
+            order_code=order_code,
+        )
+
+        if sent:
+            sent_any = True
+
+    return sent_any
 
 def send_customer_delivery_proof_email(order, customer_email, order_url=None):
     customer_email = normalize_email(customer_email)
