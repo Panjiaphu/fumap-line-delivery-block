@@ -675,6 +675,7 @@ fumapgo.com
         user_id=user_id,
     )
 
+
 def send_admin_line_bind_success_email(
     *,
     user,
@@ -1027,6 +1028,7 @@ fumapgo.com
         order_code=order_code,
     )
 
+
 def send_store_payment_verified_email(order, store_email, order_url=None):
     store_email = normalize_email(store_email)
     order_code = _safe_str(_order_value(order, "order_code", ""))
@@ -1091,6 +1093,7 @@ fumapgo.com
         order_id=order_id,
         order_code=order_code,
     )
+
 
 
 def send_store_payment_rejected_email(order, store_email, reason="", order_url=None):
