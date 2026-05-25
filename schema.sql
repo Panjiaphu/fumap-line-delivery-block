@@ -5,8 +5,6 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL CHECK(role IN ('CUSTOMER','STORE','DRIVER','ADMIN_OPERATOR')),
     display_name TEXT,
     phone TEXT,
-    email TEXT,
-    email_verified_at TEXT,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -14,7 +12,6 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
 CREATE TABLE IF NOT EXISTS stores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,9 +86,6 @@ CREATE TABLE IF NOT EXISTS orders (
             'WAITING_DRIVER',
             'DRIVER_ACCEPTED',
             'PICKED_UP',
-            'DELIVERY_ISSUE',
-            'RETURNING_TO_STORE',
-            'RETURNED_TO_STORE',
             'DELIVERED',
             'COMPLETED',
             'CANCELLED',
@@ -99,21 +93,10 @@ CREATE TABLE IF NOT EXISTS orders (
         )),
 
     payment_method TEXT NOT NULL DEFAULT 'COD'
-        CHECK(payment_method IN (
-            'COD',
-            'BANK_TRANSFER',
-            'PLATFORM',
-            'PREPAID_TO_STORE'
-        )),
+        CHECK(payment_method IN ('COD','BANK_TRANSFER','PLATFORM')),
 
     payment_status TEXT NOT NULL DEFAULT 'UNPAID'
-        CHECK(payment_status IN (
-            'UNPAID',
-            'PENDING',
-            'PENDING_REUPLOAD',
-            'PAID',
-            'FAILED'
-        )),
+        CHECK(payment_status IN ('UNPAID','PENDING','PAID','FAILED')),
 
     delivery_method TEXT NOT NULL DEFAULT 'FACE_TO_FACE'
         CHECK(delivery_method IN ('FACE_TO_FACE','PHOTO_PROOF')),
@@ -126,16 +109,11 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_address TEXT NOT NULL,
     customer_name TEXT,
     customer_phone TEXT,
-    customer_email TEXT,
-    guest_access_token TEXT,
-
     note TEXT,
     proof_image_url TEXT,
 
     smartroad_lane TEXT,
     distance_km REAL DEFAULT 0,
-
-    order_source TEXT DEFAULT 'CUSTOMER_MARKETPLACE',
 
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -150,10 +128,6 @@ CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id);
 CREATE INDEX IF NOT EXISTS idx_orders_driver_id ON orders(driver_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-CREATE INDEX IF NOT EXISTS idx_orders_customer_email ON orders(customer_email);
-CREATE INDEX IF NOT EXISTS idx_orders_guest_access_token ON orders(guest_access_token);
-CREATE INDEX IF NOT EXISTS idx_orders_guest_tracking ON orders(order_code, guest_access_token);
-CREATE INDEX IF NOT EXISTS idx_orders_order_source ON orders(order_source);
 
 CREATE TABLE IF NOT EXISTS order_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,7 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 
 CREATE TABLE IF NOT EXISTS line_contact_bindings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    role TEXT NOT NULL CHECK(role IN ('CUSTOMER','STORE','DRIVER','ADMIN')),
+    role TEXT NOT NULL CHECK(role IN ('CUSTOMER','STORE','DRIVER')),
     target_code TEXT NOT NULL,
     contact_code TEXT UNIQUE NOT NULL,
     line_user_id TEXT NOT NULL,
@@ -244,7 +218,7 @@ CREATE TABLE IF NOT EXISTS accounting_entries (
     target_code TEXT,
 
     amount_twd INTEGER NOT NULL DEFAULT 0,
-    direction TEXT NOT NULL CHECK(direction IN ('INFO','CREDIT','DEBIT','IN','OUT')),
+    direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),
     note TEXT,
 
     created_at TEXT NOT NULL,
@@ -255,87 +229,3 @@ CREATE TABLE IF NOT EXISTS accounting_entries (
 CREATE INDEX IF NOT EXISTS idx_accounting_entries_order_code ON accounting_entries(order_code);
 CREATE INDEX IF NOT EXISTS idx_accounting_entries_role_target ON accounting_entries(role, target_code);
 CREATE INDEX IF NOT EXISTS idx_accounting_entries_created_at ON accounting_entries(created_at);
-
-CREATE TABLE IF NOT EXISTS settlement_confirmations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    confirmation_code TEXT,
-    order_id INTEGER,
-    order_code TEXT,
-    confirmation_type TEXT,
-    payer_role TEXT,
-    payer_code TEXT,
-    receiver_role TEXT,
-    receiver_code TEXT,
-    amount_twd INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'CONFIRMED',
-    note TEXT,
-    admin_user_id INTEGER DEFAULT 0,
-    admin_login_id TEXT,
-    created_at TEXT,
-    updated_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_settlement_confirmations_order_code ON settlement_confirmations(order_code);
-CREATE INDEX IF NOT EXISTS idx_settlement_confirmations_payer ON settlement_confirmations(payer_role, payer_code);
-CREATE INDEX IF NOT EXISTS idx_settlement_confirmations_receiver ON settlement_confirmations(receiver_role, receiver_code);
-
-CREATE TABLE IF NOT EXISTS settlement_batches (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    settlement_code TEXT UNIQUE,
-    role TEXT,
-    target_code TEXT,
-    target_user_id INTEGER,
-    target_email TEXT,
-    direction TEXT,
-    settlement_type TEXT,
-    period_start TEXT,
-    period_end TEXT,
-    amount_twd INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'DRAFT',
-    email_sent_at TEXT,
-    paid_confirmed_at TEXT,
-    paid_confirmed_by INTEGER,
-    payment_method TEXT DEFAULT 'BANK_TRANSFER',
-    admin_bank_snapshot_json TEXT,
-    target_payout_snapshot_json TEXT,
-    related_order_codes_json TEXT,
-    note TEXT,
-    created_at TEXT,
-    updated_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_settlement_batches_code ON settlement_batches(settlement_code);
-CREATE INDEX IF NOT EXISTS idx_settlement_batches_role_target ON settlement_batches(role, target_code);
-CREATE INDEX IF NOT EXISTS idx_settlement_batches_status ON settlement_batches(status);
-CREATE INDEX IF NOT EXISTS idx_settlement_batches_period ON settlement_batches(period_start, period_end);
-
-CREATE TABLE IF NOT EXISTS system_flags (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    flag_key TEXT UNIQUE,
-    flag_value TEXT DEFAULT '0',
-    updated_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_system_flags_key ON system_flags(flag_key);
-
-CREATE TABLE IF NOT EXISTS email_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_type TEXT,
-    recipient_email TEXT,
-    recipient_role TEXT,
-    user_id INTEGER,
-    order_id INTEGER,
-    order_code TEXT,
-    subject TEXT,
-    status TEXT,
-    error_message TEXT,
-    provider_message_id TEXT,
-    retry_count INTEGER DEFAULT 0,
-    last_attempt_at TEXT,
-    created_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_email_logs_event_type ON email_logs(event_type);
-CREATE INDEX IF NOT EXISTS idx_email_logs_recipient_email ON email_logs(recipient_email);
-CREATE INDEX IF NOT EXISTS idx_email_logs_order_code ON email_logs(order_code);
-CREATE INDEX IF NOT EXISTS idx_email_logs_created_at ON email_logs(created_at);
