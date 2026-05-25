@@ -1027,6 +1027,141 @@ fumapgo.com
         order_code=order_code,
     )
 
+def send_store_payment_verified_email(order, store_email, order_url=None):
+    store_email = normalize_email(store_email)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+
+    subject = f"FUMAP GO｜轉帳付款已確認，請處理訂單｜{order_code or 'UNKNOWN'}"
+
+    final_order_url = absolute_url(order_url or f"/store/orders/{order_code}")
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      此訂單的轉帳付款已由 Admin 確認。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      系統已解除付款暫停，店家可以依訂單流程處理商品、安排出餐或呼叫 Shiper。
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      請登入店家工作台查看訂單狀態。此通知不代表銀行即時入帳，只代表 Admin 已完成系統確認。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="轉帳付款已確認",
+        body_html=body_html,
+        button_text="查看店家訂單",
+        button_url=final_order_url,
+        info_rows=_order_info_rows(
+            order,
+            extra_rows=[
+                ("Admin 確認結果", "付款已確認"),
+                ("店家處理建議", "可以開始處理訂單"),
+            ],
+        ),
+    )
+
+    text_body = f"""您好，
+
+此訂單的轉帳付款已由 Admin 確認。
+系統已解除付款暫停，店家可以依訂單流程處理商品、安排出餐或呼叫 Shiper。
+
+訂單編號：{order_code or 'UNKNOWN'}
+付款狀態：{_safe_str(_order_value(order, 'payment_status', '-')) or '-'}
+付款方式：{_safe_str(_order_value(order, 'payment_method', '-')) or '-'}
+
+查看店家訂單：
+{final_order_url}
+
+此通知不代表銀行即時入帳，只代表 Admin 已完成系統確認。
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=store_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="STORE_PAYMENT_VERIFIED",
+        recipient_role="STORE",
+        order_id=order_id,
+        order_code=order_code,
+    )
+
+
+def send_store_payment_rejected_email(order, store_email, reason="", order_url=None):
+    store_email = normalize_email(store_email)
+    order_code = _safe_str(_order_value(order, "order_code", ""))
+    order_id = _order_value(order, "id", None)
+    reject_reason = _safe_str(reason or _order_value(order, "payment_reject_reason", "")) or "轉帳付款證明需要重新確認"
+
+    subject = f"FUMAP GO｜轉帳證明未通過，訂單仍暫停｜{order_code or 'UNKNOWN'}"
+
+    final_order_url = absolute_url(order_url or f"/store/orders/{order_code}")
+
+    body_html = f"""
+    <p style="margin:0 0 12px 0;">您好，</p>
+    <p style="margin:0 0 12px 0;">
+      此訂單的轉帳付款證明未通過 Admin 確認。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      原因：<b>{html.escape(reject_reason)}</b>
+    </p>
+    <p style="margin:0 0 12px 0;">
+      此訂單目前仍為暫停狀態，請先不要製作商品或呼叫 Shiper，等待客戶重新上傳付款證明並由 Admin 再次確認。
+    </p>
+    <p style="margin:0;color:#6B7280;">
+      請登入店家工作台查看訂單狀態。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="轉帳證明未通過",
+        body_html=body_html,
+        button_text="查看店家訂單",
+        button_url=final_order_url,
+        info_rows=_order_info_rows(
+            order,
+            extra_rows=[
+                ("Admin 確認結果", "需要重新上傳"),
+                ("原因", reject_reason),
+                ("店家處理建議", "暫停處理訂單"),
+            ],
+        ),
+    )
+
+    text_body = f"""您好，
+
+此訂單的轉帳付款證明未通過 Admin 確認。
+
+訂單編號：{order_code or 'UNKNOWN'}
+付款狀態：{_safe_str(_order_value(order, 'payment_status', '-')) or '-'}
+付款方式：{_safe_str(_order_value(order, 'payment_method', '-')) or '-'}
+原因：{reject_reason}
+
+此訂單目前仍為暫停狀態，請先不要製作商品或呼叫 Shiper，等待客戶重新上傳付款證明並由 Admin 再次確認。
+
+查看店家訂單：
+{final_order_url}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    return send_email(
+        to_email=store_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body,
+        event_type="STORE_PAYMENT_REJECTED",
+        recipient_role="STORE",
+        order_id=order_id,
+        order_code=order_code,
+    )
 
 def send_admin_payment_proof_uploaded_email(order, admin_emails=None, review_url=None, proof_url=None):
     order_code = _safe_str(_order_value(order, "order_code", ""))
