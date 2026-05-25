@@ -1034,7 +1034,7 @@ def send_store_payment_verified_email(order, store_email, order_url=None):
 
     subject = f"FUMAP GO｜轉帳付款已確認，請處理訂單｜{order_code or 'UNKNOWN'}"
 
-    final_order_url = absolute_url(order_url or f"/store/orders/{order_code}")
+    final_order_url = absolute_url(order_url or f"/store/orders?order_code={order_code}")
 
     body_html = """
     <p style="margin:0 0 12px 0;">您好，</p>
@@ -1101,7 +1101,7 @@ def send_store_payment_rejected_email(order, store_email, reason="", order_url=N
 
     subject = f"FUMAP GO｜轉帳證明未通過，訂單仍暫停｜{order_code or 'UNKNOWN'}"
 
-    final_order_url = absolute_url(order_url or f"/store/orders/{order_code}")
+    final_order_url = absolute_url(order_url or f"/store/orders?order_code={order_code}")
 
     body_html = f"""
     <p style="margin:0 0 12px 0;">您好，</p>
@@ -1402,7 +1402,7 @@ def send_store_returned_to_store_email(order, store_email, order_url=None):
     store_email = normalize_email(store_email)
     order_code = _safe_str(_order_value(order, "order_code", ""))
     order_id = _order_value(order, "id", None)
-    order_url = absolute_url(order_url or f"/store/orders/{order_code}")
+    order_url = absolute_url(order_url or f"/store/orders?order_code={order_code}")
 
     subject = f"FUMAP GO｜商品已退回店家｜{order_code or 'UNKNOWN'}"
 
