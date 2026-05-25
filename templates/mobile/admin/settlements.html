@@ -33,6 +33,11 @@
     border-color: #fecaca;
   }
 
+  .settlement-card.info {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+  }
+
   .money-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -49,6 +54,7 @@
 
   .money-box h3 {
     margin: 4px 0 0;
+    font-size: 18px;
   }
 
   .action-row {
@@ -107,6 +113,29 @@
     border: 1px solid #fecaca;
     color: #991b1b;
   }
+
+  .badge.info {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+  }
+
+  .marked-paid-box {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 12px;
+    background: #ecfeff;
+    border: 1px solid #a5f3fc;
+    color: #155e75;
+  }
+
+  .rule-box {
+    padding: 12px;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    margin-top: 10px;
+  }
 </style>
 
 {% macro status_badge(status) %}
@@ -125,6 +154,20 @@
   {% endif %}
 {% endmacro %}
 
+{% macro direction_label(direction, settlement_type) %}
+  {% if direction == "TARGET_OWES_ADMIN" and settlement_type == "STORE_PLATFORM_FEE" %}
+    店家欠 Admin
+  {% elif direction == "TARGET_OWES_ADMIN" and settlement_type == "DRIVER_PLATFORM_FEE" %}
+    Shiper 欠 Admin
+  {% elif direction == "ADMIN_OWES_TARGET" and settlement_type == "ADMIN_PAYOUT_STORE" %}
+    Admin 欠店家
+  {% elif direction == "ADMIN_OWES_TARGET" and settlement_type == "ADMIN_PAYOUT_DRIVER" %}
+    Admin 欠 Shiper
+  {% else %}
+    {{ direction }} / {{ settlement_type }}
+  {% endif %}
+{% endmacro %}
+
 {% macro create_form(role, target_code, direction, settlement_type, amount_twd, period_start, period_end, button_label) %}
   <form class="mini-form" method="post" action="/admin/settlements/create">
     <input type="hidden" name="role" value="{{ role }}">
@@ -135,30 +178,56 @@
     <input type="hidden" name="period_start" value="{{ period_start }}">
     <input type="hidden" name="period_end" value="{{ period_end }}">
     <input type="hidden" name="payment_method" value="BANK_TRANSFER">
+    <input type="hidden" name="note" value="Created by Admin settlement dashboard">
     <button class="btn" {% if (amount_twd or 0) <= 0 %}disabled{% endif %}>
       {{ button_label }}
     </button>
   </form>
 {% endmacro %}
 
-{% macro open_settlement_actions(open_settlement, send_label, confirm_label) %}
+{% macro marked_paid_panel(st) %}
+  {% if st and st.target_marked_paid_at %}
+    <div class="marked-paid-box">
+      <b>對象已回報付款</b><br>
+      回報時間：{{ st.target_marked_paid_at }}<br>
+      付款方式：{{ st.target_payment_method or "BANK_TRANSFER" }}<br>
+      備註：{{ st.target_marked_paid_note or "-" }}<br>
+      <span class="muted-line">
+        注意：這只代表 Store/Shiper 已回報付款，不代表系統已結算。必須由 Admin 核對入帳後按「確認已收款」。
+      </span>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro open_settlement_actions(open_settlement, send_label, confirm_label, show_send=True, confirm_note="") %}
   {% if open_settlement %}
     <div class="settlement-history">
       <b>目前結算單：</b>{{ open_settlement.settlement_code }}<br>
       <b>金額：</b>{{ open_settlement.amount_twd|twd }}<br>
-      <b>狀態：</b>{{ status_badge(open_settlement.status) }}
+      <b>狀態：</b>{{ status_badge(open_settlement.status) }}<br>
+      <b>期間：</b>{{ open_settlement.period_start or "-" }} ~ {{ open_settlement.period_end or "-" }}
+
       {% if open_settlement.email_sent_at %}
         <br><b>Email 發送：</b>{{ open_settlement.email_sent_at }}
       {% endif %}
 
+      {% if open_settlement.paid_confirmed_at %}
+        <br><b>確認完成：</b>{{ open_settlement.paid_confirmed_at }}
+      {% endif %}
+
+      {{ marked_paid_panel(open_settlement) }}
+
       <div class="action-row">
         {% if open_settlement.status in ["DRAFT", "EMAIL_SENT"] %}
-          <form class="mini-form" method="post" action="/admin/settlements/{{ open_settlement.settlement_code }}/send-email">
-            <button class="btn secondary">{{ send_label }}</button>
-          </form>
+          {% if show_send %}
+            <form class="mini-form" method="post" action="/admin/settlements/{{ open_settlement.settlement_code }}/send-email">
+              <button class="btn secondary">{{ send_label }}</button>
+            </form>
+          {% endif %}
 
           <form class="mini-form" method="post" action="/admin/settlements/{{ open_settlement.settlement_code }}/confirm-paid">
             <input type="hidden" name="payment_method" value="BANK_TRANSFER">
+            <input type="hidden" name="note" value="{{ confirm_note }}">
             <button class="btn">{{ confirm_label }}</button>
           </form>
         {% else %}
@@ -185,34 +254,43 @@
 
 <section class="card">
   <h2>本期結算期間</h2>
-  <p class="muted">
-    {{ period_start }} ~ {{ period_end }}
-  </p>
+  <p class="muted">{{ period_start }} ~ {{ period_end }}</p>
 
   <div class="money-grid">
     <div class="money-box">
       <span class="muted">店家欠 Admin</span>
       <h3>{{ summary.store_owes_admin_twd|default(0)|twd }}</h3>
     </div>
+
     <div class="money-box">
       <span class="muted">Shiper 欠 Admin</span>
       <h3>{{ summary.driver_owes_admin_twd|default(0)|twd }}</h3>
     </div>
+
     <div class="money-box">
       <span class="muted">Admin 欠店家</span>
       <h3>{{ summary.admin_owes_store_twd|default(0)|twd }}</h3>
     </div>
+
     <div class="money-box">
       <span class="muted">Admin 欠 Shiper</span>
       <h3>{{ summary.admin_owes_driver_twd|default(0)|twd }}</h3>
     </div>
+  </div>
+
+  <div class="rule-box">
+    <b>結算核心規則</b><br>
+    Store/Shiper 付款後只能回報「我已付款」。<br>
+    Admin 必須確認實際入帳後按「確認已收款」。<br>
+    系統只在 settlement status = PAID_CONFIRMED 後，才會把欠款扣除。
   </div>
 </section>
 
 <section class="card">
   <h2>Admin 收款帳戶</h2>
   <p class="muted">
-    這是 Store / Shiper 付款給 Admin 時使用的帳戶。內容來自 Render ENV。
+    Store / Shiper 付款給 Admin 時，使用下方帳戶。內容來自 Render ENV：
+    PLATFORM_BANK_NAME、PLATFORM_BANK_CODE、PLATFORM_BANK_ACCOUNT、PLATFORM_BANK_NOTE。
   </p>
 
   <div class="money-grid">
@@ -220,25 +298,34 @@
       <span class="muted">銀行名稱</span>
       <h3>{{ admin_payment_info.bank_name or "-" }}</h3>
     </div>
+
     <div class="money-box">
       <span class="muted">銀行代碼</span>
       <h3>{{ admin_payment_info.bank_code or "-" }}</h3>
     </div>
+
     <div class="money-box">
       <span class="muted">銀行帳號</span>
       <h3>{{ admin_payment_info.bank_account or "-" }}</h3>
     </div>
+
     <div class="money-box">
       <span class="muted">轉帳備註</span>
       <h3>{{ admin_payment_info.bank_note or "-" }}</h3>
     </div>
   </div>
+
+  {% if not admin_payment_info.bank_name or not admin_payment_info.bank_account %}
+    <p class="muted" style="color:#b91c1c;">
+      Admin 收款帳戶尚未完整。請先到 Render ENV 設定銀行資料，否則 Store / Shiper 付款通知內容會不完整。
+    </p>
+  {% endif %}
 </section>
 
 <section class="card settlement-section">
   <h2>1. 店家欠 Admin</h2>
   <p class="muted">
-    店家平台費 5%。Admin 可建立結算單、發送付款通知，店家付款後由 Admin 確認已收款。
+    店家平台費 5%。Admin 可建立結算單、發送付款通知。店家付款後回報「我已付款」，Admin 核對入帳後確認已收款。
   </p>
 
   {% for s in stores %}
@@ -247,11 +334,12 @@
     {% set open_settlement = s.store_owes_admin_open_settlement %}
 
     {% if debt.unpaid_twd > 0 or open_settlement %}
-      <div class="settlement-card {% if open_settlement %}warn{% endif %}">
+      <div class="settlement-card {% if open_settlement and open_settlement.target_marked_paid_at %}info{% elif open_settlement %}warn{% endif %}">
         <h3>{{ s.store_name or "未命名店家" }}</h3>
 
         <div class="pill-row">
           <span class="badge">Store: {{ s.store_code }}</span>
+
           {% if s.email %}
             <span class="badge ok">Email: {{ s.email }}</span>
           {% else %}
@@ -263,6 +351,10 @@
           {% else %}
             <span class="badge warn">Email 尚未驗證</span>
           {% endif %}
+
+          {% if open_settlement and open_settlement.target_marked_paid_at %}
+            <span class="badge info">已回報付款</span>
+          {% endif %}
         </div>
 
         <div class="money-grid">
@@ -270,14 +362,17 @@
             <span class="muted">本月店家平台費</span>
             <h3>{{ month_debt.gross_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">未結算金額</span>
             <h3>{{ debt.unpaid_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">已建立未完成結算</span>
             <h3>{{ debt.open_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">可建立結算</span>
             <h3>{{ debt.available_to_settle_twd|twd }}</h3>
@@ -303,7 +398,13 @@
           {% endif %}
         </div>
 
-        {{ open_settlement_actions(open_settlement, "發送付款通知", "確認已收款") }}
+        {{ open_settlement_actions(
+          open_settlement,
+          "發送付款通知",
+          "確認已收款",
+          True,
+          "Admin confirmed store platform fee received."
+        ) }}
       </div>
     {% endif %}
   {% else %}
@@ -314,7 +415,7 @@
 <section class="card settlement-section">
   <h2>2. Shiper 欠 Admin</h2>
   <p class="muted">
-    Shiper 平台費 5%。Admin 可建立結算單、發送付款通知，Shiper 付款後由 Admin 確認已收款。
+    Shiper 平台費 5%。Admin 可建立結算單、發送付款通知。Shiper 付款後回報「我已付款」，Admin 核對入帳後確認已收款。
   </p>
 
   {% for d in drivers %}
@@ -323,11 +424,12 @@
     {% set open_settlement = d.driver_owes_admin_open_settlement %}
 
     {% if debt.unpaid_twd > 0 or open_settlement %}
-      <div class="settlement-card {% if open_settlement %}warn{% endif %}">
+      <div class="settlement-card {% if open_settlement and open_settlement.target_marked_paid_at %}info{% elif open_settlement %}warn{% endif %}">
         <h3>{{ d.driver_name or "未命名 Shiper" }}</h3>
 
         <div class="pill-row">
           <span class="badge">Shiper: {{ d.driver_code }}</span>
+
           {% if d.email %}
             <span class="badge ok">Email: {{ d.email }}</span>
           {% else %}
@@ -339,6 +441,10 @@
           {% else %}
             <span class="badge warn">Email 尚未驗證</span>
           {% endif %}
+
+          {% if open_settlement and open_settlement.target_marked_paid_at %}
+            <span class="badge info">已回報付款</span>
+          {% endif %}
         </div>
 
         <div class="money-grid">
@@ -346,14 +452,17 @@
             <span class="muted">本月 Shiper 平台費</span>
             <h3>{{ month_debt.gross_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">未結算金額</span>
             <h3>{{ debt.unpaid_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">已建立未完成結算</span>
             <h3>{{ debt.open_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">可建立結算</span>
             <h3>{{ debt.available_to_settle_twd|twd }}</h3>
@@ -379,7 +488,13 @@
           {% endif %}
         </div>
 
-        {{ open_settlement_actions(open_settlement, "發送付款通知", "確認已收款") }}
+        {{ open_settlement_actions(
+          open_settlement,
+          "發送付款通知",
+          "確認已收款",
+          True,
+          "Admin confirmed driver platform fee received."
+        ) }}
       </div>
     {% endif %}
   {% else %}
@@ -390,7 +505,7 @@
 <section class="card settlement-section">
   <h2>3. Admin 欠店家</h2>
   <p class="muted">
-    適用於客戶轉帳給平台/Admin，Admin 需要撥款給店家的情境。COD 不列入此項。
+    適用於客戶轉帳給平台 / Admin，Admin 需要撥款給店家的情境。COD 不列入此項。
   </p>
 
   {% for s in stores %}
@@ -404,6 +519,7 @@
 
         <div class="pill-row">
           <span class="badge">Store: {{ s.store_code }}</span>
+
           {% if s.email %}
             <span class="badge ok">Email: {{ s.email }}</span>
           {% else %}
@@ -422,14 +538,17 @@
             <span class="muted">本月 Admin 應付款</span>
             <h3>{{ month_debt.gross_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">未結算金額</span>
             <h3>{{ debt.unpaid_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">已建立未完成結算</span>
             <h3>{{ debt.open_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">可建立結算</span>
             <h3>{{ debt.available_to_settle_twd|twd }}</h3>
@@ -439,7 +558,8 @@
         <p class="muted-line">
           收款戶名：{{ s.payout_account_name or "-" }}<br>
           銀行：{{ s.payout_bank_name or "-" }} / {{ s.payout_bank_code or "-" }}<br>
-          帳號：{{ s.payout_bank_account or "-" }}
+          帳號：{{ s.payout_bank_account or "-" }}<br>
+          備註：{{ s.payout_note or "-" }}
         </p>
 
         <div class="action-row">
@@ -457,7 +577,13 @@
           {% endif %}
         </div>
 
-        {{ open_settlement_actions(open_settlement, "發送已轉帳通知", "確認已付款完成") }}
+        {{ open_settlement_actions(
+          open_settlement,
+          "",
+          "確認已付款完成",
+          False,
+          "Admin confirmed payout to store."
+        ) }}
       </div>
     {% endif %}
   {% else %}
@@ -468,7 +594,7 @@
 <section class="card settlement-section">
   <h2>4. Admin 欠 Shiper</h2>
   <p class="muted">
-    適用於客戶轉帳給平台/Admin，Admin 需要撥款給 Shiper 的情境。COD 不列入此項。
+    適用於客戶轉帳給平台 / Admin，Admin 需要撥款給 Shiper 的情境。COD 不列入此項。
   </p>
 
   {% for d in drivers %}
@@ -482,6 +608,7 @@
 
         <div class="pill-row">
           <span class="badge">Shiper: {{ d.driver_code }}</span>
+
           {% if d.email %}
             <span class="badge ok">Email: {{ d.email }}</span>
           {% else %}
@@ -500,14 +627,17 @@
             <span class="muted">本月 Admin 應付款</span>
             <h3>{{ month_debt.gross_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">未結算金額</span>
             <h3>{{ debt.unpaid_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">已建立未完成結算</span>
             <h3>{{ debt.open_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">可建立結算</span>
             <h3>{{ debt.available_to_settle_twd|twd }}</h3>
@@ -517,7 +647,8 @@
         <p class="muted-line">
           收款戶名：{{ d.payout_account_name or "-" }}<br>
           銀行：{{ d.payout_bank_name or "-" }} / {{ d.payout_bank_code or "-" }}<br>
-          帳號：{{ d.payout_bank_account or "-" }}
+          帳號：{{ d.payout_bank_account or "-" }}<br>
+          備註：{{ d.payout_note or "-" }}
         </p>
 
         <div class="action-row">
@@ -535,7 +666,13 @@
           {% endif %}
         </div>
 
-        {{ open_settlement_actions(open_settlement, "發送已轉帳通知", "確認已付款完成") }}
+        {{ open_settlement_actions(
+          open_settlement,
+          "",
+          "確認已付款完成",
+          False,
+          "Admin confirmed payout to driver."
+        ) }}
       </div>
     {% endif %}
   {% else %}
@@ -548,15 +685,18 @@
 
   {% if recent_settlements %}
     {% for st in recent_settlements %}
-      <div class="settlement-card {% if st.status == 'PAID_CONFIRMED' %}ok{% elif st.status in ['CANCELLED', 'DISPUTED'] %}danger{% else %}warn{% endif %}">
+      <div class="settlement-card {% if st.status == 'PAID_CONFIRMED' %}ok{% elif st.status in ['CANCELLED', 'DISPUTED'] %}danger{% elif st.target_marked_paid_at %}info{% else %}warn{% endif %}">
         <h3>{{ st.settlement_code }}</h3>
 
         <div class="pill-row">
           <span class="badge">{{ st.role }}</span>
           <span class="badge">{{ st.target_code }}</span>
-          <span class="badge">{{ st.direction }}</span>
-          <span class="badge">{{ st.settlement_type }}</span>
+          <span class="badge">{{ direction_label(st.direction, st.settlement_type) }}</span>
           {{ status_badge(st.status) }}
+
+          {% if st.target_marked_paid_at %}
+            <span class="badge info">對象已回報付款</span>
+          {% endif %}
         </div>
 
         <div class="money-grid">
@@ -564,6 +704,7 @@
             <span class="muted">金額</span>
             <h3>{{ st.amount_twd|twd }}</h3>
           </div>
+
           <div class="money-box">
             <span class="muted">付款方式</span>
             <h3>{{ st.payment_method or "-" }}</h3>
@@ -578,15 +719,26 @@
           確認完成：{{ st.paid_confirmed_at or "-" }}
         </p>
 
+        {{ marked_paid_panel(st) }}
+
         {% if st.status in ["DRAFT", "EMAIL_SENT"] %}
           <div class="action-row">
-            <form class="mini-form" method="post" action="/admin/settlements/{{ st.settlement_code }}/send-email">
-              <button class="btn secondary">發送 / 重發 Email</button>
-            </form>
+            {% if st.direction == "TARGET_OWES_ADMIN" %}
+              <form class="mini-form" method="post" action="/admin/settlements/{{ st.settlement_code }}/send-email">
+                <button class="btn secondary">發送 / 重發付款通知</button>
+              </form>
+            {% endif %}
 
             <form class="mini-form" method="post" action="/admin/settlements/{{ st.settlement_code }}/confirm-paid">
               <input type="hidden" name="payment_method" value="BANK_TRANSFER">
-              <button class="btn">確認已完成</button>
+
+              {% if st.direction == "TARGET_OWES_ADMIN" %}
+                <input type="hidden" name="note" value="Admin confirmed receipt from target.">
+                <button class="btn">確認已收款</button>
+              {% else %}
+                <input type="hidden" name="note" value="Admin confirmed payout to target.">
+                <button class="btn">確認已付款完成</button>
+              {% endif %}
             </form>
           </div>
         {% endif %}
@@ -603,8 +755,10 @@
     1. Email 是主要通知；LINE 是輔助通知。<br>
     2. Email 發送失敗時，不會把結算單改成 EMAIL_SENT。<br>
     3. LINE 發送失敗時，不回滾 Email 狀態。<br>
-    4. 確認完成後，未結算金額會因 PAID_CONFIRMED 自動扣除。<br>
-    5. 不刪除 orders，不改 orders 金額，不直接 reset 欠款。
+    4. Store / Shiper 按「我已付款」只代表已回報付款，不代表完成結算。<br>
+    5. Admin 必須核對實際入帳後，才按「確認已收款」。<br>
+    6. 確認完成後，未結算金額會因 PAID_CONFIRMED 自動扣除。<br>
+    7. 不刪除 orders，不改 orders 金額，不直接 reset 欠款。
   </p>
 </section>
 
