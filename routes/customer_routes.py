@@ -342,7 +342,8 @@ def checkout(store_code):
                 return redirect(f"/show/checkout/{store_code}")
 
             if delivery_method == "PHOTO_PROOF" and not email_verified:
-                delivery_method = "FACE_TO_FACE"
+                flash("請先完成 Email 驗證後，才能使用拍照完成。", "danger")
+                return redirect(f"/show/checkout/{store_code}")
 
             order = create_customer_order(
                 db,
