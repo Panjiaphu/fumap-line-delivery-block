@@ -675,6 +675,122 @@ fumapgo.com
         user_id=user_id,
     )
 
+def send_admin_line_bind_success_email(
+    *,
+    user,
+    role="",
+    role_label="",
+    target_code="",
+    line_display_name="",
+    contact_code="",
+    admin_emails=None,
+):
+    """
+    Notify Admin by Email after a user successfully binds LINE.
+
+    Rules:
+    - Uses ADMIN_NOTIFY_EMAILS / ADMIN_NOTIFY_EMAIL when admin_emails is None.
+    - Failure/skipped email must not rollback LINE bind.
+    - No LINE permission or login permission is granted by this email.
+    """
+    role = _safe_str(role)
+    role_label = _safe_str(role_label or role)
+    target_code = _safe_str(target_code)
+    line_display_name = _safe_str(line_display_name)
+    contact_code = _safe_str(contact_code)
+
+    try:
+        user_id = _row_get(user, "id", None)
+        user_email = normalize_email(_row_get(user, "email", ""))
+        user_phone = _safe_str(_row_get(user, "phone", ""))
+        user_name = _safe_str(
+            _row_get(user, "display_name", "")
+            or _row_get(user, "login_id", "")
+        )
+    except Exception:
+        user_id = None
+        user_email = ""
+        user_phone = ""
+        user_name = ""
+
+    if admin_emails is None:
+        admin_emails = get_admin_notify_emails()
+
+    if isinstance(admin_emails, str):
+        admin_emails = [admin_emails]
+
+    subject = "FUMAP GO｜新的 LINE 綁定成功"
+
+    body_html = """
+    <p style="margin:0 0 12px 0;">Admin 您好，</p>
+    <p style="margin:0 0 12px 0;">
+      有一個 FUMAP GO 帳號完成 LINE 綁定。
+    </p>
+    <p style="margin:0 0 12px 0;">
+      之後此帳號可接收 LINE 通知；LINE 綁定僅作為通知管道，不代表登入授權或帳號權限變更。
+    </p>
+    """
+
+    html_body = render_branded_email(
+        title="新的 LINE 綁定成功",
+        body_html=body_html,
+        button_text="查看 LINE 綁定狀態",
+        button_url="/line/contacts",
+        info_rows=[
+            ("角色", role_label or role or "-"),
+            ("帳號代碼", target_code or "-"),
+            ("LINE 名稱", line_display_name or "-"),
+            ("LINE 通知代碼", contact_code or "-"),
+            ("帳號名稱", user_name or "-"),
+            ("Email", user_email or "-"),
+            ("電話", user_phone or "-"),
+            ("通知方式", "Admin Email + Admin LINE"),
+        ],
+    )
+
+    text_body = f"""Admin 您好，
+
+有一個 FUMAP GO 帳號完成 LINE 綁定。
+
+角色：{role_label or role or '-'}
+帳號代碼：{target_code or '-'}
+LINE 名稱：{line_display_name or '-'}
+LINE 通知代碼：{contact_code or '-'}
+帳號名稱：{user_name or '-'}
+Email：{user_email or '-'}
+電話：{user_phone or '-'}
+
+LINE 綁定僅作為通知管道，不代表登入授權或帳號權限變更。
+
+查看 LINE 綁定狀態：
+{absolute_url('/line/contacts')}
+
+FUMAP GO
+fumapgo.com
+"""
+
+    sent_any = False
+
+    for email in admin_emails or []:
+        email = normalize_email(email)
+
+        if not email:
+            continue
+
+        sent = send_email(
+            to_email=email,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            event_type="LINE_BIND_SUCCESS_ADMIN_EMAIL",
+            recipient_role="ADMIN",
+            user_id=user_id,
+        )
+
+        if sent:
+            sent_any = True
+
+    return sent_any
 
 def _customer_order_url(order, order_url=None):
     order_code = _safe_str(_order_value(order, "order_code", ""))
