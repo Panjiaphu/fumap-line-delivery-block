@@ -13,7 +13,13 @@ from services.code_service import now_iso
 from services.block_service import create_block
 from services.order_service import get_order_items
 from services.image_service import ImageUploadError, save_compressed_upload
-from services.email_service import send_customer_delivery_proof_email
+from services.email_service import (
+    get_admin_notify_emails,
+    send_admin_returned_to_store_email,
+    send_customer_delivery_proof_email,
+    send_customer_returned_to_store_email,
+    send_store_returned_to_store_email,
+)
 from services.accounting_service import (
     calculate_order_settlement,
     create_delivery_accounting_entries,
@@ -699,6 +705,121 @@ def _push_delivery_updates(db, order):
             commit=False,
         )
 
+def _send_returned_to_store_notifications(db, order):
+    """
+    Return-to-store notification.
+
+    Rules:
+    - Email/LINE failure must not rollback the order state.
+    - Email is primary when email exists.
+    - LINE is optional when binding exists.
+    """
+    order_code = order["order_code"]
+
+    customer_email = ""
+    store_email = ""
+
+    try:
+        if order["customer_user_id"]:
+            customer = db.execute(
+                """
+                SELECT id, email, email_verified_at
+                FROM users
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (order["customer_user_id"],),
+            ).fetchone()
+
+            if customer and _safe_row_get(customer, "email", ""):
+                customer_email = _text(_safe_row_get(customer, "email", ""))
+
+    except Exception as exc:
+        print(f"[RETURNED_TO_STORE][EMAIL][CUSTOMER_LOOKUP_ERROR] {exc}")
+
+    try:
+        store_owner = db.execute(
+            """
+            SELECT u.id, u.email, u.email_verified_at
+            FROM stores s
+            JOIN users u ON u.id = s.owner_user_id
+            WHERE s.id = ?
+            LIMIT 1
+            """,
+            (order["store_id"],),
+        ).fetchone()
+
+        if store_owner and _safe_row_get(store_owner, "email", ""):
+            store_email = _text(_safe_row_get(store_owner, "email", ""))
+
+    except Exception as exc:
+        print(f"[RETURNED_TO_STORE][EMAIL][STORE_LOOKUP_ERROR] {exc}")
+
+    if customer_email:
+        try:
+            send_customer_returned_to_store_email(
+                order,
+                customer_email,
+                order_url=f"/orders?order_code={order_code}",
+            )
+        except Exception as exc:
+            print(f"[RETURNED_TO_STORE][EMAIL][CUSTOMER_ERROR] {exc}")
+
+    if store_email:
+        try:
+            send_store_returned_to_store_email(
+                order,
+                store_email,
+                order_url=f"/store/orders/{order_code}",
+            )
+        except Exception as exc:
+            print(f"[RETURNED_TO_STORE][EMAIL][STORE_ERROR] {exc}")
+
+    try:
+        send_admin_returned_to_store_email(
+            order,
+            admin_emails=get_admin_notify_emails(),
+            admin_order_url=f"/admin/orders/{order_code}",
+        )
+    except Exception as exc:
+        print(f"[RETURNED_TO_STORE][EMAIL][ADMIN_ERROR] {exc}")
+
+    try:
+        push_to_role_target(
+            db,
+            role="STORE",
+            target_code=order["store_code"],
+            event_type="RETURNED_TO_STORE",
+            order_code=order_code,
+            message=(
+                "FUMAP GO 退回店家通知\n"
+                f"訂單：{order_code}\n"
+                f"店家：{order['store_name']}\n"
+                "狀態：商品已由 Shiper 退回店家\n"
+                "請登入店家工作台確認後續處理。"
+            ),
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[RETURNED_TO_STORE][LINE][STORE_ERROR] {exc}")
+
+    if order["customer_user_id"]:
+        try:
+            push_to_role_target(
+                db,
+                role="CUSTOMER",
+                target_code=f"CUS-{order['customer_user_id']}",
+                event_type="RETURNED_TO_STORE",
+                order_code=order_code,
+                message=(
+                    "FUMAP GO 訂單退回店家通知\n"
+                    f"訂單：{order_code}\n"
+                    "狀態：商品已退回店家，後續由店家與 Admin 處理。"
+                ),
+                commit=True,
+            )
+        except Exception as exc:
+            print(f"[RETURNED_TO_STORE][LINE][CUSTOMER_ERROR] {exc}")
 
 @driver_bp.get("")
 @driver_bp.get("/")
@@ -1040,7 +1161,7 @@ def order_detail(order_code):
                 flash("已進入退回店家流程，請依導航返回店家。", "warning")
                 return redirect("/driver?board=delivery")
 
-            if action == "returned_to_store":
+                        if action == "returned_to_store":
                 _confirm_returned_to_store(
                     db,
                     user=user,
@@ -1054,6 +1175,7 @@ def order_detail(order_code):
                     return_note=request.form.get("return_note", ""),
                     contacted_store=request.form.get("contacted_store") == "1",
                     contacted_admin=request.form.get("contacted_admin") == "1",
+                    return_proof_file=request.files.get("return_proof"),
                 )
                 flash("已確認商品退回店家，請等待 Admin 處理後續對帳。", "success")
                 return redirect("/driver?board=delivery")
@@ -1410,7 +1532,44 @@ def _report_delivery_issue(
     )
 
     db.commit()
+    refreshed = _get_order_for_driver_page(db, order["order_code"])
 
+    try:
+        push_to_role_target(
+            db,
+            role="STORE",
+            target_code=refreshed["store_code"],
+            event_type="DELIVERY_ISSUE_REPORTED",
+            order_code=refreshed["order_code"],
+            message=(
+                "FUMAP GO 配送異常通知\n"
+                f"訂單：{refreshed['order_code']}\n"
+                f"原因：{issue_reason}\n"
+                "Shiper 已回報配送異常，請留意後續退回店家流程。"
+            ),
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[DELIVERY_ISSUE][LINE][STORE_ERROR] {exc}")
+
+    if refreshed["customer_user_id"]:
+        try:
+            push_to_role_target(
+                db,
+                role="CUSTOMER",
+                target_code=f"CUS-{refreshed['customer_user_id']}",
+                event_type="DELIVERY_ISSUE_REPORTED",
+                order_code=refreshed["order_code"],
+                message=(
+                    "FUMAP GO 配送異常通知\n"
+                    f"訂單：{refreshed['order_code']}\n"
+                    f"原因：{issue_reason}\n"
+                    "Shiper 已回報配送異常，系統將依流程處理。"
+                ),
+                commit=True,
+            )
+        except Exception as exc:
+            print(f"[DELIVERY_ISSUE][LINE][CUSTOMER_ERROR] {exc}")
 
 def _mark_returning_to_store(
     db,
@@ -1481,7 +1640,24 @@ def _mark_returning_to_store(
     )
 
     db.commit()
+    refreshed = _get_order_for_driver_page(db, order["order_code"])
 
+    try:
+        push_to_role_target(
+            db,
+            role="STORE",
+            target_code=refreshed["store_code"],
+            event_type="RETURNING_TO_STORE",
+            order_code=refreshed["order_code"],
+            message=(
+                "FUMAP GO 商品退回中\n"
+                f"訂單：{refreshed['order_code']}\n"
+                "Shiper 正在將商品退回店家，請準備確認商品與款項。"
+            ),
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[RETURNING_TO_STORE][LINE][STORE_ERROR] {exc}")
 
 def _confirm_returned_to_store(
     db,
@@ -1494,6 +1670,7 @@ def _confirm_returned_to_store(
     return_note="",
     contacted_store=False,
     contacted_admin=False,
+    return_proof_file=None,
 ):
     if not _driver_owns_order(order, driver):
         raise ValueError("此訂單不屬於你。")
@@ -1503,6 +1680,9 @@ def _confirm_returned_to_store(
 
     if int(order["admin_hold"] or 0) == 1:
         raise ValueError("此訂單已被 Admin 暫停，不能確認退回。")
+
+    if not return_proof_file or not getattr(return_proof_file, "filename", ""):
+        raise ValueError("請先上傳退回店家證明圖片。")
 
     money_returned_by_store = _text(
         money_returned_by_store,
@@ -1517,16 +1697,27 @@ def _confirm_returned_to_store(
     now = now_iso()
     settlement = calculate_order_settlement(order)
 
+    return_proof_url = save_compressed_upload(
+        return_proof_file,
+        kind="proof_image",
+        owner_code=f"return-{order['order_code']}",
+    )
+    return_proof_uploaded_at = now
+
     cur = db.execute(
         """
         UPDATE orders
         SET status = 'RETURNED_TO_STORE',
+            return_proof_image_url = ?,
+            return_proof_uploaded_at = ?,
             updated_at = ?
         WHERE id = ?
           AND driver_id = ?
           AND status = 'RETURNING_TO_STORE'
         """,
         (
+            return_proof_url,
+            return_proof_uploaded_at,
             now,
             order["id"],
             driver["id"],
@@ -1560,13 +1751,22 @@ def _confirm_returned_to_store(
             "return_note": return_note,
             "contacted_store": bool(contacted_store),
             "contacted_admin": bool(contacted_admin),
+            "return_proof_image_url": return_proof_url,
+            "return_proof_uploaded_at": return_proof_uploaded_at,
             "next_step": "ADMIN_REVIEW",
-            "note": "Goods returned to store. Admin should review settlement, COD, refund or dispute.",
+            "note": "Goods returned to store with proof image. Admin should review settlement, COD, refund or dispute.",
         },
         commit=False,
     )
 
     db.commit()
+
+    refreshed = _get_order_for_driver_page(db, order["order_code"])
+
+    try:
+        _send_returned_to_store_notifications(db, refreshed)
+    except Exception as exc:
+        print(f"[RETURNED_TO_STORE][NOTIFY][ERROR] {exc}")
 
 
 def _deliver_order(db, *, user, driver, order):
