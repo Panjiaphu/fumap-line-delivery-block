@@ -19,6 +19,8 @@ from services.email_service import (
     send_customer_delivery_proof_email,
     send_customer_returned_to_store_email,
     send_store_returned_to_store_email,
+    send_admin_payout_requested_email,
+    send_admin_settlement_target_marked_paid_email,
 )
 from services.accounting_service import (
     calculate_order_settlement,
@@ -27,18 +29,32 @@ from services.accounting_service import (
     list_driver_accounting_entries,
     driver_accounting_summary,
 )
+from services.settlement_service import (
+    get_target_payout_summary,
+    get_target_admin_debt_summary,
+    create_target_payout_request,
+    mark_settlement_target_paid,
+)
 
 try:
-    from services.line_notify_service import push_to_role_target
+    from services.line_notify_service import (
+        push_to_role_target,
+        push_admin_payout_requested,
+        push_admin_settlement_target_marked_paid,
+    )
 except Exception:
     def push_to_role_target(db, **kwargs):
+        return {"ok": False, "skipped": True}
+
+    def push_admin_payout_requested(db, **kwargs):
+        return {"ok": False, "skipped": True}
+
+    def push_admin_settlement_target_marked_paid(db, **kwargs):
         return {"ok": False, "skipped": True}
 
 
 driver_bp = Blueprint("driver", __name__, url_prefix="/driver")
 
-# Driver Capacity V1:
-# Shiper may accept multiple active delivery orders, but no more than 5.
 MAX_ACTIVE_ORDERS = 5
 
 DRIVER_WORKING_STATUSES = {
@@ -89,6 +105,12 @@ def _safe_row_get(row, key, default=None):
     try:
         if row and key in row.keys():
             return row[key]
+    except Exception:
+        pass
+
+    try:
+        if isinstance(row, dict):
+            return row.get(key, default)
     except Exception:
         pass
 
@@ -295,7 +317,6 @@ def _delivery_order_sort_key(order):
         _int(_safe_row_get(order, "id", 0), 0),
     )
 
-
 def _active_order_count(db, driver_id):
     row = db.execute(
         """
@@ -316,12 +337,6 @@ def _active_order_count(db, driver_id):
 
 
 def _driver_capacity(db, driver_id):
-    """
-    Driver Capacity V1.
-
-    Active orders are counted realtime from orders table.
-    No new DB column is required.
-    """
     active_count = _active_order_count(db, driver_id)
     max_active = MAX_ACTIVE_ORDERS
     remaining = max(0, max_active - active_count)
@@ -593,17 +608,7 @@ def _can_view_order(order, driver):
 
     return _driver_owns_order(order, driver)
 
-
 def _driver_fast_summary(db, driver, waiting_orders, active_orders):
-    """
-    Driver dashboard summary.
-
-    Important COD V2 rule:
-    - Use calculate_order_settlement() as the single source of truth.
-    - Shiper does not collect store platform fee for Admin.
-    - COD driver_pay_store = subtotal - store_delivery_support.
-    - COD driver_pay_admin = shiper platform fee only.
-    """
     summary = driver_accounting_summary(db, driver)
 
     driver_id = int(driver["id"])
@@ -705,15 +710,8 @@ def _push_delivery_updates(db, order):
             commit=False,
         )
 
-def _send_returned_to_store_notifications(db, order):
-    """
-    Return-to-store notification.
 
-    Rules:
-    - Email/LINE failure must not rollback the order state.
-    - Email is primary when email exists.
-    - LINE is optional when binding exists.
-    """
+def _send_returned_to_store_notifications(db, order):
     order_code = order["order_code"]
 
     customer_email = ""
@@ -770,7 +768,7 @@ def _send_returned_to_store_notifications(db, order):
             send_store_returned_to_store_email(
                 order,
                 store_email,
-                order_url=f"/store/orders/{order_code}",
+                order_url=f"/store/orders?order_code={order_code}",
             )
         except Exception as exc:
             print(f"[RETURNED_TO_STORE][EMAIL][STORE_ERROR] {exc}")
@@ -779,7 +777,7 @@ def _send_returned_to_store_notifications(db, order):
         send_admin_returned_to_store_email(
             order,
             admin_emails=get_admin_notify_emails(),
-            admin_order_url=f"/admin/orders/{order_code}",
+            admin_order_url=f"/admin/orders?order_code={order_code}",
         )
     except Exception as exc:
         print(f"[RETURNED_TO_STORE][EMAIL][ADMIN_ERROR] {exc}")
@@ -820,6 +818,61 @@ def _send_returned_to_store_notifications(db, order):
             )
         except Exception as exc:
             print(f"[RETURNED_TO_STORE][LINE][CUSTOMER_ERROR] {exc}")
+
+
+def _notify_admin_driver_payout_requested(db, *, driver, settlement, payout_summary, note=""):
+    try:
+        send_admin_payout_requested_email(
+            target=driver,
+            settlement=settlement,
+            payout_summary=payout_summary,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+            note=note,
+        )
+    except Exception as exc:
+        print(f"[DRIVER][PAYOUT_REQUEST][EMAIL_ADMIN][ERROR] {exc}")
+
+    try:
+        push_admin_payout_requested(
+            db,
+            target=driver,
+            settlement=settlement,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+            note=note,
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[DRIVER][PAYOUT_REQUEST][LINE_ADMIN][ERROR] {exc}")
+
+
+def _notify_admin_driver_marked_paid(db, *, driver, settlement, note="", payment_method=""):
+    try:
+        send_admin_settlement_target_marked_paid_email(
+            target=driver,
+            settlement=settlement,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+            payment_method=payment_method,
+            note=note,
+        )
+    except Exception as exc:
+        print(f"[DRIVER][MARK_PAID][EMAIL_ADMIN][ERROR] {exc}")
+
+    try:
+        push_admin_settlement_target_marked_paid(
+            db,
+            target=driver,
+            settlement=settlement,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+            payment_method=payment_method,
+            note=note,
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[DRIVER][MARK_PAID][LINE_ADMIN][ERROR] {exc}")
 
 @driver_bp.get("")
 @driver_bp.get("/")
@@ -1076,7 +1129,6 @@ def set_driver_area():
 def orders_alias():
     return redirect("/driver")
 
-
 @driver_bp.route("/order/<order_code>", methods=["GET", "POST"])
 @login_required
 @role_required("DRIVER")
@@ -1320,7 +1372,6 @@ def _accept_order(db, *, user, driver, order):
         commit=True,
     )
 
-
 def _cancel_accept_order(db, *, user, driver, order, reason=""):
     if not _driver_is_active(driver):
         raise ValueError("Shiper 帳號尚未通過審核，不能操作訂單。")
@@ -1422,8 +1473,6 @@ def _pickup_order(db, *, user, driver, order):
             "store_lat": _safe_row_get(order, "store_lat", 0),
             "store_lng": _safe_row_get(order, "store_lng", 0),
             "pickup_map_url": _order_pickup_map_url(order),
-
-            # COD V2 cash-flow proof.
             "cod_v2_rule": "Shiper pays store subtotal minus store delivery support. Store platform fee is settled by store with Admin separately.",
             "driver_collect_from_customer_twd": settlement["driver_collect_from_customer_twd"],
             "driver_pay_store_twd": settlement["driver_pay_store_twd"],
@@ -1432,7 +1481,6 @@ def _pickup_order(db, *, user, driver, order):
             "driver_net_income_twd": settlement["driver_net_income_twd"],
             "store_platform_fee_twd": settlement["store_platform_fee_twd"],
             "admin_total_receivable_twd": settlement["admin_total_receivable_twd"],
-
             "note": "Shiper 已到店取餐。COD V2：店家平台費由店家自行與 Admin 結算，Shiper 不代收。",
         },
         commit=False,
@@ -1659,6 +1707,7 @@ def _mark_returning_to_store(
     except Exception as exc:
         print(f"[RETURNING_TO_STORE][LINE][STORE_ERROR] {exc}")
 
+
 def _confirm_returned_to_store(
     db,
     *,
@@ -1870,8 +1919,6 @@ def _deliver_order(db, *, user, driver, order):
             "delivery_lat": _safe_row_get(order, "delivery_lat", 0),
             "delivery_lng": _safe_row_get(order, "delivery_lng", 0),
             "delivery_map_url": _order_delivery_map_url(order),
-
-            # COD V2 settlement snapshot.
             "driver_collect_from_customer_twd": settlement["driver_collect_from_customer_twd"],
             "driver_pay_store_twd": settlement["driver_pay_store_twd"],
             "driver_pay_admin_twd": settlement["driver_pay_admin_twd"],
@@ -1880,7 +1927,6 @@ def _deliver_order(db, *, user, driver, order):
             "driver_net_income_twd": settlement["driver_net_income_twd"],
             "store_platform_fee_twd": settlement["store_platform_fee_twd"],
             "admin_total_receivable_twd": settlement["admin_total_receivable_twd"],
-
             "note": "Shiper confirmed delivery. COD V2: store platform fee is settled by store with Admin separately.",
         },
         commit=False,
@@ -1921,8 +1967,6 @@ def _deliver_order(db, *, user, driver, order):
     _push_delivery_updates(db, refreshed)
 
     db.commit()
-
-    email_sent = False
 
     try:
         customer = None
@@ -1986,16 +2030,40 @@ def accounting():
     summary = driver_accounting_summary(db, driver)
     done_orders = _list_driver_done_orders(db, driver["id"], limit=200)
 
+    payout_summary = None
+    admin_debt_summary = None
+
+    try:
+        payout_summary = get_target_payout_summary(
+            db,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+        )
+    except Exception as exc:
+        print(f"[DRIVER][ACCOUNTING][PAYOUT_SUMMARY][ERROR] {exc}")
+
+    try:
+        admin_debt_summary = get_target_admin_debt_summary(
+            db,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+        )
+    except Exception as exc:
+        print(f"[DRIVER][ACCOUNTING][ADMIN_DEBT_SUMMARY][ERROR] {exc}")
+
     return render_template(
         "mobile/driver/accounting.html",
         driver=driver,
         entries=entries,
         summary=summary,
         done_orders=done_orders,
+        payout_summary=payout_summary,
+        admin_debt_summary=admin_debt_summary,
     )
 
 
 @driver_bp.post("/payout-account")
+@driver_bp.post("/payout/bank-account")
 @login_required
 @role_required("DRIVER")
 def payout_account_update():
@@ -2069,99 +2137,10 @@ def payout_account_update():
     return redirect("/driver/accounting")
 
 
-@driver_bp.get("/realtime/status")
+@driver_bp.post("/payout/request")
 @login_required
 @role_required("DRIVER")
-def realtime_status():
-    db = get_db()
-    driver = _require_driver_or_redirect()
-
-    if not driver:
-        return jsonify({"ok": False, "error": "DRIVER_NOT_FOUND"}), 403
-
-    if not _driver_is_active(driver):
-        return jsonify(_driver_inactive_realtime_payload(driver))
-
-    waiting_orders = _list_waiting_driver_orders(db, driver)
-    active_orders = _list_driver_active_orders(db, driver["id"])
-    capacity = _driver_capacity(db, driver["id"])
-
-    latest = waiting_orders[0] if waiting_orders else None
-    is_online = int(driver["is_online"] or 0) == 1
-
-    latest_order_code = _safe_row_get(latest, "order_code", "") if latest else ""
-    latest_target_url = f"/driver#{latest_order_code}" if latest_order_code else "/driver"
-
-    delivery_fee_twd = 0
-    extra_fee_twd = 0
-    latest_delivery_fee_twd = 0
-
-    if latest:
-        settlement = calculate_order_settlement(latest)
-        delivery_fee_twd = settlement["delivery_fee_twd"]
-        extra_fee_twd = settlement["extra_fee_twd"]
-        latest_delivery_fee_twd = settlement["driver_gross_twd"]
-
-    active_working_orders = [
-        o for o in active_orders
-        if _safe_row_get(o, "status", "") in DRIVER_WORKING_STATUSES
-    ]
-
-    can_ring = bool(is_online and capacity["can_accept"] and len(waiting_orders) > 0)
-
-    if not capacity["can_accept"]:
-        message = capacity["message"]
-    elif can_ring:
-        message = "有新配送單"
-    else:
-        message = ""
-
-    payload = {
-        "ok": True,
-        "role": "DRIVER",
-        "is_online": is_online,
-        "should_ring": can_ring,
-        "message": message,
-        "target_url": latest_target_url,
-
-        "waiting_orders": len(waiting_orders),
-        "available_orders": len(waiting_orders),
-        "active_orders": len(active_working_orders),
-        "max_active_orders": MAX_ACTIVE_ORDERS,
-        "can_accept_more_orders": capacity["can_accept"],
-        "remaining_capacity_orders": capacity["remaining"],
-        "driver_capacity": capacity,
-
-        "latest_order_code": latest_order_code,
-        "latest_store_name": _safe_row_get(latest, "store_name", "") if latest else "",
-        "latest_store_address": _safe_row_get(latest, "store_address", "") if latest else "",
-        "latest_delivery_address": _safe_row_get(latest, "delivery_address", "") if latest else "",
-        "latest_distance_km": _safe_row_get(latest, "distance_km", "") if latest else "",
-        "latest_distance_band": _safe_row_get(latest, "distance_band", "") if latest else "",
-        "latest_total_twd": int(_safe_row_get(latest, "total_twd", 0) or 0) if latest else 0,
-        "latest_delivery_fee_twd": latest_delivery_fee_twd,
-        "latest_base_delivery_fee_twd": delivery_fee_twd,
-        "latest_extra_fee_twd": extra_fee_twd,
-        "latest_smartroad_lane": _safe_row_get(latest, "smartroad_lane", "") if latest else "",
-        "latest_smartroad_score": _safe_row_get(latest, "smartroad_score", "") if latest else "",
-        "latest_payment_method": _safe_row_get(latest, "payment_method", "") if latest else "",
-        "latest_payment_status": _safe_row_get(latest, "payment_status", "") if latest else "",
-
-        "city_block": _driver_city_block(driver),
-        "area_label": _driver_area_label(driver),
-        "server_time": now_iso(),
-    }
-
-    return jsonify(payload)
-
-
-@driver_bp.route("/contract", methods=["GET", "POST"])
-@login_required
-@role_required("DRIVER")
-def contract():
-    import hashlib
-    import json
-
+def payout_request():
     db = get_db()
     user = current_user()
     driver = _require_driver_or_redirect()
@@ -2169,106 +2148,139 @@ def contract():
     if not driver:
         return redirect("/login")
 
-    contract_terms = [
-        "外送員同意使用 FUMAP GO 作為在地買貨與外送協作平台。平台提供可接訂單、SmartRoad 區域提示、Google Maps 導航、配送流程、對帳紀錄與 BlockFGO 留證服務。",
-        "外送員需自行維護姓名、電話、服務區域、交通工具與上線狀態。LINE 綁定僅作為通知與聯絡用途，不作為登入、帳號建立或權限授予。",
-        "外送員可自行切換 ONLINE / OFFLINE。ONLINE 狀態下，外送員可查看同區域 WAITING_DRIVER 訂單，並自行選擇是否接單。",
-        "外送員按下「接單」後，系統會鎖定該訂單，其他外送員不能再接同一筆訂單。接單後，外送員應依平台流程完成取貨、配送與必要 proof。",
-        "FUMAP GO 採低平台費模式，平台僅向外送員收取配送收入 5% 作為平台服務費。外送員配送收入、平台費、淨收入、應收與應付金額，均以系統對帳頁顯示為準。",
-        "配送收入包含基礎配送費與困難配送加價。Commercial V2 中，基礎配送費可能由客戶與店家共同分擔，但不影響外送員依系統顯示取得完整配送收入。",
-        "Commercial V2 基礎配送費如下：0–2 公里：基礎配送費 40 TWD；3–4 公里：基礎配送費 60 TWD；5–6 公里：基礎配送費 80 TWD；超過 6 公里：不自動派單，需由 Admin 手動處理或另行確認。",
-        "困難配送加價為每筆訂單最多加收 20 TWD，並計入外送員配送收入。困難配送包含上樓、重物、地址難找、商場中心、偏遠地點、雨天或其他特殊情況。即使同一筆訂單同時包含多個困難因素，系統仍最多只加收一次 20 TWD。",
-        "COD 訂單中，外送員到店取貨時，需依系統顯示之「到店應付店家金額」先支付給店家。該金額為商品金額扣除店家支援配送費；店家平台費由店家與 Admin 另行結算，外送員不代收。",
-        "COD 訂單配送成功後，外送員向客戶收取 COD 總額。外送員收款後，僅需依對帳頁支付自己的 Shiper 平台費，剩餘為外送員配送收入。店家平台費由店家自行與 Admin 結算。",
-        "若 COD 訂單因客戶拒收、地址錯誤、客戶失聯、不可抗力或其他非外送員可控制因素導致配送失敗，外送員應將商品退回店家，並依系統紀錄向店家取回已支付之到店取貨款。",
-        "若店家拒絕接收退回商品或拒絕退還 COD 到店取貨款，外送員應立即聯絡 Admin，由 Admin 依訂單紀錄、付款紀錄、LINE 聯絡紀錄與 BlockFGO 紀錄進行處理。",
-        "若訂單為客戶已付款、轉帳或其他預付方式，外送員到店取貨時原則上不需向店家支付商品款。若配送失敗，外送員應將商品退回店家，並由 Admin / 店家 / 客戶依付款紀錄協調後續處理。",
-        "外送員應注意取貨地址、送達地址、客戶電話、店家電話、樓層、地址備註、交付方式與困難配送加價。若地址不清楚，應聯絡客戶、店家或 Admin 確認。",
-        "PHOTO_PROOF 訂單必須提供交付證明；FACE_TO_FACE 訂單應當面交付給客戶或指定接收人。若無法完成交付，外送員不得自行判定完成，應依流程回報。",
-        "Google Maps 與 SmartRoad 僅作為導航與區域提示工具，實際路況、地址確認與配送安全仍需由外送員自行判斷。若系統提供 GPS 或座標導航，外送員仍應以實際道路與安全情況為優先。",
-        "外送員不得無故棄單、惡意延遲、虛假完成配送、私下更改收款方式或不當使用客戶與店家資料。",
-        "若發生交通事故、付款異常、客戶失聯、地址錯誤、商品問題或其他突發情況，外送員應即時回報 Admin，不得自行隱瞞或私下處理造成更大爭議。",
-        "BlockFGO 用於記錄接單、取貨、送達、proof、付款、退貨、退款與對帳流程，是交易留證與流程紀錄，不是投資、收益或現金承諾。",
-        "TimeBlock 為平台貢獻紀錄，用於記錄外送員上線、接單、配送完成或配合平台流程之貢獻。TimeBlock 不等於現金，不保證收益，不構成投資承諾。",
-        "外送員只能於配送與客服必要範圍內使用客戶與店家資訊，不得未經授權保存、外洩、販售或不當使用客戶電話、地址、店家資料或訂單內容。",
-        "外送員應遵守交通規則，注意自身與他人安全。交通工具、保險、手機、網路、配送設備與個人安全責任，由外送員自行負責。",
-        "合約簽署後，系統會保存簽署時間、合約內容、合約 hash 與 BlockFGO 紀錄。合約簽署後只可查看，不可刪除或修改；若需更新，需由 Admin 建立新版本並重新簽署。",
-    ]
+    try:
+        amount_twd = _int(request.form.get("amount_twd"), 0)
+        note = request.form.get("note", "").strip()
 
-    if request.method == "POST":
-        if driver["contract_signed_at"]:
-            flash("合約已簽署，只能查看，不能重複簽署。", "warning")
-            return redirect("/driver/contract")
+        payout_summary = get_target_payout_summary(
+            db,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+        )
 
-        agree = request.form.get("agree", "").strip()
+        available = int(payout_summary.get("available_to_request_twd") or 0)
 
-        if agree != "1":
-            flash("請先勾選同意合約條款。", "danger")
-            return redirect("/driver/contract")
+        if available <= 0:
+            raise ValueError("目前沒有可申請付款的金額。")
 
-        signed_at = now_iso()
+        if amount_twd <= 0:
+            amount_twd = available
 
-        payload = {
-            "contract_type": "DRIVER_COMMERCIAL_V1",
-            "driver_code": driver["driver_code"],
-            "driver_name": driver["driver_name"],
-            "user_id": user["id"],
-            "signed_at": signed_at,
-            "terms": contract_terms,
-        }
+        if amount_twd > available:
+            raise ValueError("申請金額不能超過可申請付款金額。")
 
-        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        contract_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        settlement = create_target_payout_request(
+            db,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+            amount_twd=amount_twd,
+            note=note or "Requested by DRIVER from driver accounting page",
+            commit=False,
+        )
 
-        try:
-            db.execute(
-                """
-                UPDATE drivers
-                SET contract_signed_at = ?,
-                    contract_payload_json = ?,
-                    contract_hash = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    signed_at,
-                    payload_json,
-                    contract_hash,
-                    signed_at,
-                    driver["id"],
-                ),
-            )
+        create_block(
+            db,
+            event_type="SETTLEMENT_REQUESTED_BY_DRIVER",
+            actor_role="DRIVER",
+            actor_id=user["id"],
+            actor_code=driver["driver_code"],
+            amount_twd=amount_twd,
+            payload={
+                "driver_code": driver["driver_code"],
+                "driver_name": driver["driver_name"],
+                "settlement_code": settlement.get("settlement_code"),
+                "direction": "ADMIN_OWES_TARGET",
+                "settlement_type": "ADMIN_PAYOUT_DRIVER",
+                "amount_twd": amount_twd,
+                "available_to_request_twd": available,
+                "note": note,
+            },
+            commit=False,
+        )
 
-            create_block(
-                db,
-                event_type="DRIVER_CONTRACT_SIGNED",
-                actor_role="DRIVER",
-                actor_id=user["id"],
-                actor_code=driver["driver_code"],
-                previous_status="UNSIGNED",
-                new_status="SIGNED",
-                payload={
-                    "contract_type": "DRIVER_COMMERCIAL_V1",
-                    "driver_code": driver["driver_code"],
-                    "contract_hash": contract_hash,
-                    "signed_at": signed_at,
-                },
-                commit=False,
-            )
+        db.commit()
 
-            db.commit()
-            flash("Shiper 合約已簽署。簽署後只能查看，不能刪除。", "success")
+        _notify_admin_driver_payout_requested(
+            db,
+            driver=driver,
+            settlement=settlement,
+            payout_summary=payout_summary,
+            note=note,
+        )
 
-        except Exception as exc:
-            db.rollback()
-            flash(f"合約簽署失敗：{exc}", "danger")
+        flash("已送出 Admin 付款申請。Admin 確認轉帳後，對帳金額會自動更新。", "success")
 
-        return redirect("/driver/contract")
+    except Exception as exc:
+        db.rollback()
+        flash(f"申請 Admin 付款失敗：{exc}", "danger")
 
-    driver = get_current_driver()
+    return redirect("/driver/accounting")
 
-    return render_template(
-        "mobile/driver/contract.html",
-        driver=driver,
-        contract_terms=contract_terms,
-    )
+
+@driver_bp.post("/settlements/<settlement_code>/mark-paid")
+@login_required
+@role_required("DRIVER")
+def settlement_mark_paid(settlement_code):
+    db = get_db()
+    user = current_user()
+    driver = _require_driver_or_redirect()
+
+    if not driver:
+        return redirect("/login")
+
+    try:
+        payment_method = (
+            request.form.get("payment_method", "BANK_TRANSFER").strip().upper()
+            or "BANK_TRANSFER"
+        )
+        note = request.form.get("note", "").strip()
+
+        settlement = mark_settlement_target_paid(
+            db,
+            settlement_code,
+            role="DRIVER",
+            target_code=driver["driver_code"],
+            payment_method=payment_method,
+            note=note,
+            commit=False,
+        )
+
+        create_block(
+            db,
+            event_type="SETTLEMENT_TARGET_MARKED_PAID",
+            actor_role="DRIVER",
+            actor_id=user["id"],
+            actor_code=driver["driver_code"],
+            amount_twd=settlement.get("amount_twd", 0),
+            payload={
+                "driver_code": driver["driver_code"],
+                "driver_name": driver["driver_name"],
+                "settlement_code": settlement.get("settlement_code"),
+                "direction": settlement.get("direction"),
+                "settlement_type": settlement.get("settlement_type"),
+                "amount_twd": settlement.get("amount_twd", 0),
+                "payment_method": payment_method,
+                "note": note,
+                "target_marked_paid_at": settlement.get("target_marked_paid_at"),
+                "important_rule": "This does not finalize settlement. Admin must confirm-paid.",
+            },
+            commit=False,
+        )
+
+        db.commit()
+
+        _notify_admin_driver_marked_paid(
+            db,
+            driver=driver,
+            settlement=settlement,
+            note=note,
+            payment_method=payment_method,
+        )
+
+        flash("已回報付款。請等待 Admin 核對入帳並確認收款。", "success")
+
+    except Exception as exc:
+        db.rollback()
+        flash(f"回報付款失敗：{exc}", "danger")
+
+    return redirect("/driver/accounting")
