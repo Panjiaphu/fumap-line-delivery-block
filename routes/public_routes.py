@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, current_app, jsonify, request, session
+from flask import Blueprint, render_template, jsonify, request, session
 
 from db import get_db
 from services.order_service import list_public_stores
@@ -24,31 +24,6 @@ def show():
         selected_city_block=city_block or "",
     )
 
-
-@public_bp.get("/health")
-def health():
-    try:
-        db = get_db()
-        db.execute("SELECT 1").fetchone()
-
-        return jsonify(
-            {
-                "ok": True,
-                "app": current_app.config.get("APP_NAME", "FUMAP GO"),
-                "database": "ok",
-                "mode": "commercial-v1",
-            }
-        )
-
-    except Exception as e:
-        return jsonify(
-            {
-                "ok": False,
-                "error": str(e),
-            }
-        ), 500
-        
-        
 
 @public_bp.route("/v2/events/poll", methods=["GET", "HEAD"])
 def v2_events_poll_compat():
@@ -89,7 +64,10 @@ def v2_events_poll_compat():
         base_payload.update(
             {
                 "authenticated": False,
-                "note": "Compatibility endpoint. Current frontend uses /store/realtime/status or /driver/realtime/status.",
+                "note": (
+                    "Compatibility endpoint. Current frontend uses "
+                    "/store/realtime/status or /driver/realtime/status."
+                ),
             }
         )
         return jsonify(base_payload)
