@@ -12,6 +12,8 @@ from services.email_service import (
     normalize_email,
     send_customer_payment_verified_email,
     send_customer_payment_rejected_email,
+    send_store_payment_verified_email,
+    send_store_payment_rejected_email,
     send_store_payment_request_email,
     send_driver_payment_request_email,
     send_store_payout_confirmed_email,
@@ -210,6 +212,129 @@ def _notify_customer_payment_rejected(db, *, order, reason=""):
     except Exception as exc:
         print(f"[PAYMENT][LINE][CUSTOMER_REJECTED][ERROR] {exc}")
 
+
+def _store_order_url(order_code):
+    return f"/store/orders?order_code={order_code}"
+
+
+def _store_line_target_code(order):
+    return _safe_text(_row_get(order, "store_code", ""))
+
+
+def _store_email_for_order(db, order):
+    """
+    Get store owner email for an order.
+
+    _get_order_for_admin currently joins store_code/store_name but not owner email,
+    so this helper queries store owner directly.
+    """
+    direct_email = normalize_email(
+        _row_get(order, "store_email", "")
+        or _row_get(order, "owner_email", "")
+        or _row_get(order, "store_owner_email", "")
+    )
+
+    if direct_email:
+        return direct_email
+
+    store_id = _row_get(order, "store_id", None)
+
+    if not store_id:
+        return ""
+
+    try:
+        row = db.execute(
+            """
+            SELECT u.email
+            FROM stores s
+            JOIN users u ON u.id = s.owner_user_id
+            WHERE s.id = ?
+            LIMIT 1
+            """,
+            (store_id,),
+        ).fetchone()
+
+        if row:
+            return normalize_email(_row_get(row, "email", ""))
+
+    except Exception as exc:
+        print(f"[PAYMENT][EMAIL][STORE_LOOKUP][ERROR] {exc}")
+
+    return ""
+
+
+def _notify_store_payment_verified(db, *, order):
+    order_code = _safe_text(_row_get(order, "order_code", ""))
+    store_code = _store_line_target_code(order)
+    store_email = _store_email_for_order(db, order)
+
+    try:
+        if store_email:
+            send_store_payment_verified_email(
+                order,
+                store_email,
+                order_url=_store_order_url(order_code),
+            )
+    except Exception as exc:
+        print(f"[PAYMENT][EMAIL][STORE_APPROVED][ERROR] {exc}")
+
+    try:
+        if store_code:
+            push_to_role_target(
+                db,
+                role="STORE",
+                target_code=store_code,
+                event_type="STORE_PAYMENT_VERIFIED",
+                order_code=order_code,
+                message=(
+                    "FUMAP GO 轉帳付款已確認\n"
+                    f"訂單：{order_code}\n"
+                    "Admin 已確認客戶付款。此訂單已解除付款暫停，店家可以開始處理。"
+                ),
+                commit=True,
+            )
+    except Exception as exc:
+        print(f"[PAYMENT][LINE][STORE_APPROVED][ERROR] {exc}")
+
+
+def _notify_store_payment_rejected(db, *, order, reason=""):
+    order_code = _safe_text(_row_get(order, "order_code", ""))
+    store_code = _store_line_target_code(order)
+    store_email = _store_email_for_order(db, order)
+    reason = _safe_text(reason or _row_get(order, "payment_reject_reason", ""))
+
+    if not reason:
+        reason = "轉帳付款證明需要重新確認"
+
+    try:
+        if store_email:
+            send_store_payment_rejected_email(
+                order,
+                store_email,
+                reason=reason,
+                order_url=_store_order_url(order_code),
+            )
+    except Exception as exc:
+        print(f"[PAYMENT][EMAIL][STORE_REJECTED][ERROR] {exc}")
+
+    try:
+        if store_code:
+            push_to_role_target(
+                db,
+                role="STORE",
+                target_code=store_code,
+                event_type="STORE_PAYMENT_REJECTED",
+                order_code=order_code,
+                message=(
+                    "FUMAP GO 轉帳證明未通過\n"
+                    f"訂單：{order_code}\n"
+                    f"原因：{reason}\n"
+                    "此訂單仍為暫停狀態，請先不要製作商品或呼叫 Shiper。"
+                ),
+                commit=True,
+            )
+    except Exception as exc:
+        print(f"[PAYMENT][LINE][STORE_REJECTED][ERROR] {exc}")
 
 def _recent_orders(db, limit=20):
     return db.execute(
@@ -1479,9 +1604,15 @@ def order_action(order_code):
 
         if notify_customer_verified and updated_order:
             _notify_customer_payment_verified(db, order=updated_order)
+            _notify_store_payment_verified(db, order=updated_order)
 
         if notify_customer_rejected and updated_order:
             _notify_customer_payment_rejected(
+                db,
+                order=updated_order,
+                reason=reject_notify_reason,
+            )
+            _notify_store_payment_rejected(
                 db,
                 order=updated_order,
                 reason=reject_notify_reason,
