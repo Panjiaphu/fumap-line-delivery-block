@@ -1,6 +1,5 @@
 import math
 import uuid
-from datetime import datetime
 
 from services.code_service import now_iso
 
@@ -65,9 +64,9 @@ def _current_month_range():
     start = f"{year:04d}-{month:02d}-01"
 
     if month == 12:
-      next_start = f"{year + 1:04d}-01-01"
+        next_start = f"{year + 1:04d}-01-01"
     else:
-      next_start = f"{year:04d}-{month + 1:02d}-01"
+        next_start = f"{year:04d}-{month + 1:02d}-01"
 
     return start, next_start
 
@@ -85,13 +84,135 @@ def _table_columns(db, table_name):
         return set()
 
 
+def _table_exists(db, table_name):
+    try:
+        row = db.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+            LIMIT 1
+            """,
+            (_text(table_name),),
+        ).fetchone()
+
+        return bool(row)
+    except Exception:
+        return False
+
+
 def _accounting_table_exists(db):
-    return "accounting_entries" in {
-        r["name"]
-        for r in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+    return _table_exists(db, "accounting_entries")
+
+
+def _settlement_batches_table_exists(db):
+    return _table_exists(db, "settlement_batches")
+
+
+def _settlement_total(
+    db,
+    *,
+    role,
+    target_code,
+    direction,
+    settlement_type,
+    statuses,
+):
+    """
+    Read settlement_batches safely.
+
+    Phase 6 Lite rule:
+    - Only PAID_CONFIRMED decreases debt.
+    - DRAFT / EMAIL_SENT are open settlements.
+    - target_marked_paid_at does not decrease debt.
+    """
+    if not _settlement_batches_table_exists(db):
+        return 0
+
+    required_columns = {
+        "role",
+        "target_code",
+        "direction",
+        "settlement_type",
+        "status",
+        "amount_twd",
     }
+
+    if not required_columns.issubset(_table_columns(db, "settlement_batches")):
+        return 0
+
+    statuses = [
+        _text(status).upper()
+        for status in (statuses or [])
+        if _text(status)
+    ]
+
+    if not statuses:
+        return 0
+
+    placeholders = ",".join(["?"] * len(statuses))
+
+    try:
+        row = db.execute(
+            f"""
+            SELECT COALESCE(SUM(amount_twd), 0) AS total
+            FROM settlement_batches
+            WHERE role = ?
+              AND target_code = ?
+              AND direction = ?
+              AND settlement_type = ?
+              AND status IN ({placeholders})
+            """,
+            (
+                _text(role).upper(),
+                _text(target_code),
+                _text(direction).upper(),
+                _text(settlement_type).upper(),
+                *statuses,
+            ),
+        ).fetchone()
+
+        return _money(_row_get(row, "total", 0))
+
+    except Exception:
+        return 0
+
+
+def _paid_settlement_total(
+    db,
+    *,
+    role,
+    target_code,
+    direction,
+    settlement_type,
+):
+    return _settlement_total(
+        db,
+        role=role,
+        target_code=target_code,
+        direction=direction,
+        settlement_type=settlement_type,
+        statuses=["PAID_CONFIRMED"],
+    )
+
+
+def _open_settlement_total(
+    db,
+    *,
+    role,
+    target_code,
+    direction,
+    settlement_type,
+):
+    return _settlement_total(
+        db,
+        role=role,
+        target_code=target_code,
+        direction=direction,
+        settlement_type=settlement_type,
+        statuses=["DRAFT", "EMAIL_SENT"],
+    )
 
 
 def calculate_order_settlement(order):
@@ -478,6 +599,7 @@ def _store_orders(db, store_id):
 
 def driver_accounting_summary(db, driver):
     driver_id = _int(_row_get(driver, "id", 0))
+    driver_code = _text(_row_get(driver, "driver_code", ""))
     today = now_iso()[:10]
     month_start, next_month_start = _current_month_range()
 
@@ -500,6 +622,9 @@ def driver_accounting_summary(db, driver):
 
         "unpaid_driver_platform_fee_twd": 0,
         "unpaid_platform_fee_twd": 0,
+        "paid_driver_platform_fee_twd": 0,
+        "open_driver_platform_fee_twd": 0,
+        "available_driver_platform_fee_twd": 0,
 
         "active_orders_count": 0,
         "available_orders_count": 0,
@@ -561,8 +686,6 @@ def driver_accounting_summary(db, driver):
         summary["total_income_twd"] += gross
         summary["total_platform_fee_twd"] += platform_fee
         summary["total_net_income_twd"] += net
-        summary["unpaid_driver_platform_fee_twd"] += platform_fee
-        summary["unpaid_platform_fee_twd"] += platform_fee
 
         if payment_method == "COD":
             summary["total_cod_collected_twd"] += settlement["driver_collect_from_customer_twd"]
@@ -599,19 +722,44 @@ def driver_accounting_summary(db, driver):
                 summary["month_payable_store_twd"] += settlement["driver_pay_store_twd"]
                 summary["month_cash_keep_twd"] += settlement["driver_keep_twd"]
 
+    paid_platform_fee = _paid_settlement_total(
+        db,
+        role="DRIVER",
+        target_code=driver_code,
+        direction="TARGET_OWES_ADMIN",
+        settlement_type="DRIVER_PLATFORM_FEE",
+    )
+    open_platform_fee = _open_settlement_total(
+        db,
+        role="DRIVER",
+        target_code=driver_code,
+        direction="TARGET_OWES_ADMIN",
+        settlement_type="DRIVER_PLATFORM_FEE",
+    )
+
+    gross_platform_fee = summary["total_platform_fee_twd"]
+    unpaid_platform_fee = max(0, gross_platform_fee - paid_platform_fee)
+    available_platform_fee = max(0, gross_platform_fee - paid_platform_fee - open_platform_fee)
+
+    summary["paid_driver_platform_fee_twd"] = paid_platform_fee
+    summary["open_driver_platform_fee_twd"] = open_platform_fee
+    summary["unpaid_driver_platform_fee_twd"] = unpaid_platform_fee
+    summary["unpaid_platform_fee_twd"] = unpaid_platform_fee
+    summary["available_driver_platform_fee_twd"] = available_platform_fee
+
     summary["driver_gross_twd"] = summary["total_income_twd"]
     summary["driver_platform_fee_twd"] = summary["total_platform_fee_twd"]
     summary["driver_net_income_twd"] = summary["total_net_income_twd"]
     summary["cod_collected_twd"] = summary["total_cod_collected_twd"]
     summary["pay_store_twd"] = summary["total_payable_store_twd"]
-    summary["pay_admin_twd"] = summary["total_platform_fee_twd"]
+    summary["pay_admin_twd"] = unpaid_platform_fee
     summary["driver_clear_cash_after_payables_twd"] = summary["total_net_income_twd"]
 
     try:
         summary["entries_count"] = len(
             list_driver_accounting_entries(
                 db,
-                _text(_row_get(driver, "driver_code", "")),
+                driver_code,
                 limit=10000,
             )
         )
@@ -623,6 +771,7 @@ def driver_accounting_summary(db, driver):
 
 def store_accounting_summary(db, store):
     store_id = _int(_row_get(store, "id", 0))
+    store_code = _text(_row_get(store, "store_code", ""))
     today = now_iso()[:10]
     month_start, next_month_start = _current_month_range()
 
@@ -643,6 +792,9 @@ def store_accounting_summary(db, store):
 
         "unpaid_store_platform_fee_twd": 0,
         "unpaid_platform_fee_twd": 0,
+        "paid_store_platform_fee_twd": 0,
+        "open_store_platform_fee_twd": 0,
+        "available_store_platform_fee_twd": 0,
 
         "pending_receivable_twd": 0,
         "pending_cash_from_driver_twd": 0,
@@ -704,8 +856,6 @@ def store_accounting_summary(db, store):
             summary["total_delivery_support_twd"] += support
             summary["total_cash_from_driver_twd"] += cash_from_driver
             summary["total_net_twd"] += net
-            summary["unpaid_store_platform_fee_twd"] += service_fee
-            summary["unpaid_platform_fee_twd"] += service_fee
 
             if is_today:
                 summary["today_completed_orders_count"] += 1
@@ -733,5 +883,30 @@ def store_accounting_summary(db, store):
             summary["pending_receivable_twd"] += net
             summary["pending_cash_from_driver_twd"] += cash_from_driver
             summary["pending_platform_fee_twd"] += service_fee
+
+    paid_platform_fee = _paid_settlement_total(
+        db,
+        role="STORE",
+        target_code=store_code,
+        direction="TARGET_OWES_ADMIN",
+        settlement_type="STORE_PLATFORM_FEE",
+    )
+    open_platform_fee = _open_settlement_total(
+        db,
+        role="STORE",
+        target_code=store_code,
+        direction="TARGET_OWES_ADMIN",
+        settlement_type="STORE_PLATFORM_FEE",
+    )
+
+    gross_platform_fee = summary["total_platform_fee_twd"]
+    unpaid_platform_fee = max(0, gross_platform_fee - paid_platform_fee)
+    available_platform_fee = max(0, gross_platform_fee - paid_platform_fee - open_platform_fee)
+
+    summary["paid_store_platform_fee_twd"] = paid_platform_fee
+    summary["open_store_platform_fee_twd"] = open_platform_fee
+    summary["unpaid_store_platform_fee_twd"] = unpaid_platform_fee
+    summary["unpaid_platform_fee_twd"] = unpaid_platform_fee
+    summary["available_store_platform_fee_twd"] = available_platform_fee
 
     return summary
