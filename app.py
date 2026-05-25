@@ -99,6 +99,7 @@ def create_app():
 
     register_context(app)
     register_routes(app)
+    _print_route_map(app)
 
     return app
 
@@ -263,6 +264,12 @@ def register_context(app):
 
 app = create_app()
 
+def _print_route_map(app):
+    print("[BOOT][ROUTES] ------------------------------")
+    for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
+        methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
+        print(f"[BOOT][ROUTES] {methods:10s} {rule.rule:40s} -> {rule.endpoint}")
+    print("[BOOT][ROUTES] ------------------------------")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
