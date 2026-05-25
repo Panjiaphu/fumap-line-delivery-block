@@ -1596,8 +1596,8 @@ def _deliver_order(db, *, user, driver, order):
         )
         delivery_proof_uploaded_at = now
 
-   if proof_required and not proof_url:
-       raise ValueError("此單選擇拍照完成，請先上傳配送證明圖片。")
+    if proof_required and not proof_url:
+        raise ValueError("此單選擇拍照完成，請先上傳配送證明圖片。")
 
     cur = db.execute(
         """
