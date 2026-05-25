@@ -30,6 +30,20 @@ from services.order_service import (
     get_order_by_code,
     get_order_items,
 )
+from services.settlement_service import (
+    get_target_payout_summary,
+    get_target_admin_debt_summary,
+    create_target_payout_request,
+    mark_settlement_target_paid,
+)
+from services.email_service import (
+    send_admin_payout_requested_email,
+    send_admin_settlement_target_marked_paid_email,
+)
+from services.line_notify_service import (
+    push_admin_payout_requested,
+    push_admin_settlement_target_marked_paid,
+)
 
 
 store_bp = Blueprint("store", __name__, url_prefix="/store")
@@ -53,6 +67,18 @@ def _float(value, default=0.0):
         return float(value)
     except Exception:
         return float(default)
+
+
+def _safe_text(value, default=""):
+    try:
+        value = str(value if value is not None else default).strip()
+        return value if value else default
+    except Exception:
+        return default
+
+
+def _store_code(store):
+    return _safe_text(store["store_code"] if store else "")
 
 
 def _require_store_or_redirect():
@@ -275,6 +301,60 @@ def _attach_order_items(db, orders):
     return order_list
 
 
+def _notify_admin_store_payout_requested(db, *, store, settlement, payout_summary, note=""):
+    try:
+        send_admin_payout_requested_email(
+            target=store,
+            settlement=settlement,
+            payout_summary=payout_summary,
+            role="STORE",
+            target_code=store["store_code"],
+            note=note,
+        )
+    except Exception as exc:
+        print(f"[STORE][PAYOUT_REQUEST][EMAIL_ADMIN][ERROR] {exc}")
+
+    try:
+        push_admin_payout_requested(
+            db,
+            target=store,
+            settlement=settlement,
+            role="STORE",
+            target_code=store["store_code"],
+            note=note,
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[STORE][PAYOUT_REQUEST][LINE_ADMIN][ERROR] {exc}")
+
+
+def _notify_admin_store_marked_paid(db, *, store, settlement, note="", payment_method=""):
+    try:
+        send_admin_settlement_target_marked_paid_email(
+            target=store,
+            settlement=settlement,
+            role="STORE",
+            target_code=store["store_code"],
+            payment_method=payment_method,
+            note=note,
+        )
+    except Exception as exc:
+        print(f"[STORE][MARK_PAID][EMAIL_ADMIN][ERROR] {exc}")
+
+    try:
+        push_admin_settlement_target_marked_paid(
+            db,
+            target=store,
+            settlement=settlement,
+            role="STORE",
+            target_code=store["store_code"],
+            payment_method=payment_method,
+            note=note,
+            commit=True,
+        )
+    except Exception as exc:
+        print(f"[STORE][MARK_PAID][LINE_ADMIN][ERROR] {exc}")
+
 @store_bp.get("")
 @store_bp.get("/")
 @login_required
@@ -395,6 +475,7 @@ def realtime_status():
         return jsonify(_store_inactive_realtime_payload(store))
 
     return jsonify(_store_realtime_payload(db, store))
+
 
 @store_bp.route("/setup", methods=["GET", "POST"])
 @login_required
@@ -586,7 +667,6 @@ def setup():
         store=store,
         store_status=store_status,
     )
-
 
 @store_bp.route("/products", methods=["GET", "POST"])
 @login_required
@@ -885,6 +965,7 @@ def products():
         products=rows,
     )
 
+
 @store_bp.route("/orders/new", methods=["GET", "POST"])
 @login_required
 @role_required("STORE")
@@ -949,7 +1030,6 @@ def create_delivery():
         store=store,
         rain_surcharge_enabled=rain_surcharge_enabled,
     )
-
 
 @store_bp.get("/orders")
 @login_required
@@ -1110,15 +1190,39 @@ def accounting():
     entries = list_store_accounting_entries(db, store["store_code"], limit=300)
     summary = store_accounting_summary(db, store)
 
+    payout_summary = None
+    admin_debt_summary = None
+
+    try:
+        payout_summary = get_target_payout_summary(
+            db,
+            role="STORE",
+            target_code=store["store_code"],
+        )
+    except Exception as exc:
+        print(f"[STORE][ACCOUNTING][PAYOUT_SUMMARY][ERROR] {exc}")
+
+    try:
+        admin_debt_summary = get_target_admin_debt_summary(
+            db,
+            role="STORE",
+            target_code=store["store_code"],
+        )
+    except Exception as exc:
+        print(f"[STORE][ACCOUNTING][ADMIN_DEBT_SUMMARY][ERROR] {exc}")
+
     return render_template(
         "mobile/store/accounting.html",
         store=store,
         entries=entries,
         summary=summary,
+        payout_summary=payout_summary,
+        admin_debt_summary=admin_debt_summary,
     )
 
 
 @store_bp.post("/payout-account")
+@store_bp.post("/payout/bank-account")
 @login_required
 @role_required("STORE")
 def payout_account_update():
@@ -1190,6 +1294,155 @@ def payout_account_update():
         flash(f"更新收款帳戶失敗：{exc}", "danger")
 
     return redirect("/store/accounting")
+
+@store_bp.post("/payout/request")
+@login_required
+@role_required("STORE")
+def payout_request():
+    db = get_db()
+    user = current_user()
+    store = _require_store_or_redirect()
+
+    if not store:
+        return redirect("/login")
+
+    try:
+        amount_twd = _int(request.form.get("amount_twd"), 0)
+        note = request.form.get("note", "").strip()
+
+        payout_summary = get_target_payout_summary(
+            db,
+            role="STORE",
+            target_code=store["store_code"],
+        )
+
+        available = int(payout_summary.get("available_to_request_twd") or 0)
+
+        if available <= 0:
+            raise ValueError("目前沒有可申請付款的金額。")
+
+        if amount_twd <= 0:
+            amount_twd = available
+
+        if amount_twd > available:
+            raise ValueError("申請金額不能超過可申請付款金額。")
+
+        settlement = create_target_payout_request(
+            db,
+            role="STORE",
+            target_code=store["store_code"],
+            amount_twd=amount_twd,
+            note=note or "Requested by STORE from store accounting page",
+            commit=False,
+        )
+
+        create_block(
+            db,
+            event_type="SETTLEMENT_REQUESTED_BY_STORE",
+            actor_role="STORE",
+            actor_id=user["id"],
+            actor_code=store["store_code"],
+            amount_twd=amount_twd,
+            payload={
+                "store_code": store["store_code"],
+                "store_name": store["store_name"],
+                "settlement_code": settlement.get("settlement_code"),
+                "direction": "ADMIN_OWES_TARGET",
+                "settlement_type": "ADMIN_PAYOUT_STORE",
+                "amount_twd": amount_twd,
+                "available_to_request_twd": available,
+                "note": note,
+            },
+            commit=False,
+        )
+
+        db.commit()
+
+        _notify_admin_store_payout_requested(
+            db,
+            store=store,
+            settlement=settlement,
+            payout_summary=payout_summary,
+            note=note,
+        )
+
+        flash("已送出 Admin 付款申請。Admin 確認轉帳後，對帳金額會自動更新。", "success")
+
+    except Exception as exc:
+        db.rollback()
+        flash(f"申請 Admin 付款失敗：{exc}", "danger")
+
+    return redirect("/store/accounting")
+
+
+@store_bp.post("/settlements/<settlement_code>/mark-paid")
+@login_required
+@role_required("STORE")
+def settlement_mark_paid(settlement_code):
+    db = get_db()
+    user = current_user()
+    store = _require_store_or_redirect()
+
+    if not store:
+        return redirect("/login")
+
+    try:
+        payment_method = (
+            request.form.get("payment_method", "BANK_TRANSFER").strip().upper()
+            or "BANK_TRANSFER"
+        )
+        note = request.form.get("note", "").strip()
+
+        settlement = mark_settlement_target_paid(
+            db,
+            settlement_code,
+            role="STORE",
+            target_code=store["store_code"],
+            payment_method=payment_method,
+            note=note,
+            commit=False,
+        )
+
+        create_block(
+            db,
+            event_type="SETTLEMENT_TARGET_MARKED_PAID",
+            actor_role="STORE",
+            actor_id=user["id"],
+            actor_code=store["store_code"],
+            amount_twd=settlement.get("amount_twd", 0),
+            payload={
+                "store_code": store["store_code"],
+                "store_name": store["store_name"],
+                "settlement_code": settlement.get("settlement_code"),
+                "direction": settlement.get("direction"),
+                "settlement_type": settlement.get("settlement_type"),
+                "amount_twd": settlement.get("amount_twd", 0),
+                "payment_method": payment_method,
+                "note": note,
+                "target_marked_paid_at": settlement.get("target_marked_paid_at"),
+                "important_rule": "This does not finalize settlement. Admin must confirm-paid.",
+            },
+            commit=False,
+        )
+
+        db.commit()
+
+        _notify_admin_store_marked_paid(
+            db,
+            store=store,
+            settlement=settlement,
+            note=note,
+            payment_method=payment_method,
+        )
+
+        flash("已回報付款。請等待 Admin 核對入帳並確認收款。", "success")
+
+    except Exception as exc:
+        db.rollback()
+        flash(f"回報付款失敗：{exc}", "danger")
+
+    return redirect("/store/accounting")
+
 
 @store_bp.route("/contract", methods=["GET", "POST"])
 @login_required
