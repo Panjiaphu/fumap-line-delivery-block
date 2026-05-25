@@ -233,7 +233,7 @@
 
     {% if order.delivery_method == 'PHOTO_PROOF' %}
       <p class="muted">
-        此單需要拍照完成。可上傳配送證明圖片作為系統留證。<br>
+        此單需要拍照完成。請上傳配送證明圖片作為系統留證。<br>
         請確認已完成交付後，按下「確認已送達」。
       </p>
     {% else %}
@@ -372,7 +372,7 @@
       <a class="btn secondary" href="/line/bind">聯絡 Admin</a>
     </div>
 
-    <form method="post" style="margin-top:12px;">
+    <form method="post" enctype="multipart/form-data" style="margin-top:12px;">
       <div class="form-group">
         <label>店家是否已退還取貨款？</label>
         <select name="money_returned_by_store">
@@ -390,6 +390,20 @@
       <div class="form-group">
         <label>退回備註</label>
         <textarea name="return_note" rows="3" placeholder="例：商品已退回，店家已退還取貨款"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label>退回店家證明圖片（必填）</label>
+        <input
+          type="file"
+          name="return_proof"
+          accept="image/*"
+          capture="environment"
+          required
+        >
+        <p class="muted" style="margin-top:6px;">
+          請拍攝商品已退回店家或店家確認收回的照片。圖片會保存在系統中，Email 只會寄送訂單連結，不會將圖片作為附件寄出。
+        </p>
       </div>
 
       <label class="check-row">
@@ -419,6 +433,22 @@
         COD 單若客戶未付款或拒收，請勿自行完成配送。<br>
         請確認店家是否已退還取貨款。若未退還，請聯絡 Admin 並保留證明。
       </p>
+    {% endif %}
+
+    {% if order.return_proof_image_url %}
+      <section class="card" style="background:#f8fafc;border-color:#cbd5e1;">
+        <h3>退回店家證明</h3>
+        <p class="muted">
+          上傳時間：{{ order.return_proof_uploaded_at or '-' }}<br>
+          此圖片為退回店家流程證明，僅授權角色可查看。
+        </p>
+
+        <img
+          src="/proofs/orders/{{ order.order_code }}/return"
+          alt="退回店家證明"
+          style="width:100%;max-height:420px;object-fit:contain;border-radius:12px;border:1px solid #e5e7eb;background:#fff;"
+        >
+      </section>
     {% endif %}
 
     <a class="btn secondary" href="/line/bind">聯絡 Admin</a>
