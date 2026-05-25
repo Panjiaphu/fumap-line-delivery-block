@@ -155,7 +155,7 @@ def _add_column_if_missing(db, table_name, column_name, column_sql):
 
 def ensure_settlement_tables(db):
     """
-    Safe runtime guard for Admin Settlement V1.
+    Safe runtime guard for Admin Settlement V1 / Phase 6 Lite.
 
     db.py already creates these fields. This service also keeps a defensive
     ensure function so routes can call it safely before settlement operations.
@@ -186,6 +186,16 @@ def ensure_settlement_tables(db):
         ("payment_method", "payment_method TEXT DEFAULT 'BANK_TRANSFER'"),
         ("admin_bank_snapshot_json", "admin_bank_snapshot_json TEXT"),
         ("target_payout_snapshot_json", "target_payout_snapshot_json TEXT"),
+
+        # Phase 6 Lite:
+        # Store/Driver may report that they already paid Admin.
+        # This is only a report, not final confirmation.
+        # Only Admin confirm-paid may set PAID_CONFIRMED.
+        ("target_marked_paid_at", "target_marked_paid_at TEXT"),
+        ("target_marked_paid_note", "target_marked_paid_note TEXT"),
+        ("target_payment_method", "target_payment_method TEXT"),
+        ("target_payment_proof_image_url", "target_payment_proof_image_url TEXT"),
+
         ("related_order_codes_json", "related_order_codes_json TEXT"),
         ("note", "note TEXT"),
         ("created_at", "created_at TEXT"),
@@ -214,6 +224,10 @@ def ensure_settlement_tables(db):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_settlement_batches_period "
         "ON settlement_batches(period_start, period_end)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_settlement_batches_target_marked_paid_at "
+        "ON settlement_batches(target_marked_paid_at)"
     )
 
     for table_name in ("stores", "drivers"):
@@ -254,6 +268,7 @@ def payout_account_is_complete(target):
     return bool(
         snapshot["payout_account_name"]
         and snapshot["payout_bank_name"]
+        and snapshot["payout_bank_code"]
         and snapshot["payout_bank_account"]
     )
 
@@ -689,6 +704,149 @@ def _target_name(target, role):
     return ""
 
 
+def get_target_payout_summary(
+    db,
+    *,
+    role,
+    target_code,
+    period_start=None,
+    period_end=None,
+):
+    """
+    Phase 6 Lite: Admin owes Store/Driver.
+
+    Used by Store/Driver accounting page when target wants to request payout
+    from Admin.
+
+    Debt decreases only when settlement_batches.status = PAID_CONFIRMED.
+    Open settlements remain DRAFT/EMAIL_SENT and reduce available_to_request.
+    """
+    ensure_settlement_tables(db)
+
+    role = _text(role).upper()
+    target_code = _text(target_code)
+
+    target = _get_target(db, role, target_code)
+
+    if not target:
+        raise ValueError("Settlement target not found.")
+
+    if role == "STORE":
+        summary = calculate_admin_owes_store(
+            db,
+            target,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        settlement_type = "ADMIN_PAYOUT_STORE"
+    elif role == "DRIVER":
+        summary = calculate_admin_owes_driver(
+            db,
+            target,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        settlement_type = "ADMIN_PAYOUT_DRIVER"
+    else:
+        raise ValueError("Invalid settlement role.")
+
+    open_settlement = _latest_open_settlement_dict(
+        db,
+        role=role,
+        target_code=target_code,
+        direction="ADMIN_OWES_TARGET",
+        settlement_type=settlement_type,
+    )
+
+    payout_snapshot = snapshot_target_payout_account(target)
+
+    return {
+        "role": role,
+        "target_code": target_code,
+        "settlement_type": settlement_type,
+        "direction": "ADMIN_OWES_TARGET",
+        "admin_owes_target_twd": _money(summary.get("unpaid_twd", 0)),
+        "gross_twd": _money(summary.get("gross_twd", 0)),
+        "paid_confirmed_twd": _money(summary.get("paid_twd", 0)),
+        "open_settlement_twd": _money(summary.get("open_twd", 0)),
+        "available_to_request_twd": _money(summary.get("available_to_settle_twd", 0)),
+        "related_order_codes": summary.get("related_order_codes", []),
+        "open_settlement": open_settlement,
+        "payout_account_complete": payout_account_is_complete(target),
+        "payout_snapshot": payout_snapshot,
+        "target": _row_to_dict(target),
+    }
+
+
+def get_target_admin_debt_summary(
+    db,
+    *,
+    role,
+    target_code,
+    period_start=None,
+    period_end=None,
+):
+    """
+    Phase 6 Lite: Store/Driver owes Admin.
+
+    Used by Store/Driver accounting page to show "我欠 Admin".
+
+    target_marked_paid_at does NOT decrease debt.
+    Only PAID_CONFIRMED decreases debt.
+    """
+    ensure_settlement_tables(db)
+
+    role = _text(role).upper()
+    target_code = _text(target_code)
+
+    target = _get_target(db, role, target_code)
+
+    if not target:
+        raise ValueError("Settlement target not found.")
+
+    if role == "STORE":
+        summary = calculate_store_unpaid_admin_debt(
+            db,
+            target,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        settlement_type = "STORE_PLATFORM_FEE"
+    elif role == "DRIVER":
+        summary = calculate_driver_unpaid_admin_debt(
+            db,
+            target,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        settlement_type = "DRIVER_PLATFORM_FEE"
+    else:
+        raise ValueError("Invalid settlement role.")
+
+    open_settlement = _latest_open_settlement_dict(
+        db,
+        role=role,
+        target_code=target_code,
+        direction="TARGET_OWES_ADMIN",
+        settlement_type=settlement_type,
+    )
+
+    return {
+        "role": role,
+        "target_code": target_code,
+        "settlement_type": settlement_type,
+        "direction": "TARGET_OWES_ADMIN",
+        "target_owes_admin_twd": _money(summary.get("unpaid_twd", 0)),
+        "gross_twd": _money(summary.get("gross_twd", 0)),
+        "paid_confirmed_twd": _money(summary.get("paid_twd", 0)),
+        "open_settlement_twd": _money(summary.get("open_twd", 0)),
+        "available_to_pay_twd": _money(summary.get("available_to_settle_twd", 0)),
+        "related_order_codes": summary.get("related_order_codes", []),
+        "open_settlement": open_settlement,
+        "admin_payment_info": snapshot_admin_payment_info(),
+        "target": _row_to_dict(target),
+    }
+
 def create_settlement_batch(
     db,
     *,
@@ -798,6 +956,87 @@ def create_settlement_batch(
     return get_settlement_by_code(db, code)
 
 
+def create_target_payout_request(
+    db,
+    *,
+    role,
+    target_code,
+    amount_twd=0,
+    period_start=None,
+    period_end=None,
+    note="",
+    commit=False,
+):
+    """
+    Phase 6 Lite: Store/Driver requests Admin payout.
+
+    Creates settlement_batches DRAFT:
+    - direction = ADMIN_OWES_TARGET
+    - settlement_type = ADMIN_PAYOUT_STORE / ADMIN_PAYOUT_DRIVER
+
+    Does not create payout_requests table.
+    """
+    ensure_settlement_tables(db)
+
+    role = _text(role).upper()
+    target_code = _text(target_code)
+
+    summary = get_target_payout_summary(
+        db,
+        role=role,
+        target_code=target_code,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+    if not summary["payout_account_complete"]:
+        raise ValueError("請先完成收款銀行帳戶設定。")
+
+    available = _money(summary["available_to_request_twd"])
+
+    if available <= 0:
+        raise ValueError("目前沒有可申請付款的金額。")
+
+    requested_amount = _money(amount_twd)
+
+    if requested_amount <= 0:
+        requested_amount = available
+
+    if requested_amount > available:
+        raise ValueError("申請金額不能超過可申請付款金額。")
+
+    if role == "STORE":
+        settlement_type = "ADMIN_PAYOUT_STORE"
+        default_note = "Requested by STORE from store accounting page"
+    elif role == "DRIVER":
+        settlement_type = "ADMIN_PAYOUT_DRIVER"
+        default_note = "Requested by DRIVER from driver accounting page"
+    else:
+        raise ValueError("Invalid settlement role.")
+
+    final_note = _text(note) or default_note
+
+    settlement = create_settlement_batch(
+        db,
+        role=role,
+        target_code=target_code,
+        direction="ADMIN_OWES_TARGET",
+        settlement_type=settlement_type,
+        amount_twd=requested_amount,
+        period_start=period_start,
+        period_end=period_end,
+        related_order_codes=summary.get("related_order_codes", []),
+        payment_method="BANK_TRANSFER",
+        note=final_note,
+        commit=False,
+    )
+
+    if commit:
+        db.commit()
+
+    return settlement
+
+
 def get_settlement_by_code(db, settlement_code):
     ensure_settlement_tables(db)
 
@@ -854,6 +1093,71 @@ def mark_settlement_email_sent(db, settlement_code, commit=False):
 
     if cur.rowcount <= 0:
         raise ValueError("Settlement cannot be marked as EMAIL_SENT.")
+
+    if commit:
+        db.commit()
+
+    return get_settlement_by_code(db, settlement_code)
+
+
+def mark_settlement_target_paid(
+    db,
+    settlement_code,
+    *,
+    role,
+    target_code,
+    payment_method="BANK_TRANSFER",
+    note="",
+    commit=False,
+):
+    """
+    Phase 6 Lite: Store/Driver reports payment to Admin.
+
+    Critical rule:
+    - This function MUST NOT set PAID_CONFIRMED.
+    - Debt is NOT reduced here.
+    - Only Admin confirm_settlement_paid() can finalize settlement.
+    """
+    ensure_settlement_tables(db)
+
+    role = _text(role).upper()
+    target_code = _text(target_code)
+    payment_method = _text(payment_method, "BANK_TRANSFER").upper()
+
+    if role not in VALID_ROLES:
+        raise ValueError("Invalid settlement role.")
+
+    if payment_method not in VALID_PAYMENT_METHODS:
+        payment_method = "OTHER"
+
+    now = now_iso()
+
+    cur = db.execute(
+        """
+        UPDATE settlement_batches
+        SET target_marked_paid_at = ?,
+            target_marked_paid_note = ?,
+            target_payment_method = ?,
+            updated_at = ?
+        WHERE settlement_code = ?
+          AND role = ?
+          AND target_code = ?
+          AND direction = 'TARGET_OWES_ADMIN'
+          AND status IN ('DRAFT', 'EMAIL_SENT')
+        """,
+        (
+            now,
+            _text(note),
+            payment_method,
+            now,
+            _text(settlement_code).upper(),
+            role,
+            target_code,
+        ),
+    )
+
+    if cur.rowcount <= 0:
+        raise ValueError("此結算單不能由目前帳號回報付款。")
 
     if commit:
         db.commit()
@@ -980,7 +1284,6 @@ def dispute_settlement(db, settlement_code, *, note="", commit=False):
         db.commit()
 
     return get_settlement_by_code(db, settlement_code)
-
 
 def _latest_open_settlement_dict(
     db,
