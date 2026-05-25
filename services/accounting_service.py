@@ -910,3 +910,143 @@ def store_accounting_summary(db, store):
     summary["available_store_platform_fee_twd"] = available_platform_fee
 
     return summary
+
+def list_admin_accounting_entries(db, limit=500):
+    """
+    Admin accounting feed.
+
+    Compatibility helper for routes/admin_routes.py:
+    /admin/accounting imports this function directly.
+
+    Safe rule:
+    - If accounting_entries table is missing, return [].
+    - Do not throw, so Admin dashboard does not crash.
+    """
+    if not _accounting_table_exists(db):
+        return []
+
+    return db.execute(
+        """
+        SELECT *
+        FROM accounting_entries
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (_int(limit, 500),),
+    ).fetchall()
+
+
+def admin_accounting_summary(db):
+    """
+    Admin accounting summary.
+
+    Used by /admin/accounting.
+
+    Business rules:
+    - Admin revenue = Store platform fee + Driver platform fee.
+    - COD:
+      Customer pays Shiper in cash.
+      Shiper pays Store at pickup.
+      Store platform fee is owed by Store to Admin.
+      Driver platform fee is owed by Driver to Admin.
+    - BANK_TRANSFER / PLATFORM:
+      Platform/Admin holds customer payment.
+      Platform/Admin should later pay Store and Driver via settlement.
+    - Debt should not be reset here.
+      Phase 6 Lite settlement truth remains settlement_batches.status = PAID_CONFIRMED.
+    """
+    summary = {
+        "admin_revenue_twd": 0,
+        "entries_count": 0,
+
+        "store_platform_fee_twd": 0,
+        "driver_platform_fee_twd": 0,
+
+        "cod_admin_receivable_from_driver_twd": 0,
+        "manual_review_orders": 0,
+
+        "platform_customer_collected_twd": 0,
+        "platform_keep_revenue_twd": 0,
+        "platform_pay_store_twd": 0,
+        "platform_pay_driver_twd": 0,
+        "platform_cash_after_payables_twd": 0,
+
+        "completed_orders_count": 0,
+        "total_order_twd": 0,
+    }
+
+    try:
+        row = db.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM accounting_entries
+            """
+        ).fetchone()
+
+        summary["entries_count"] = int(row["c"] or 0) if row else 0
+    except Exception:
+        summary["entries_count"] = 0
+
+    try:
+        orders = db.execute(
+            """
+            SELECT *
+            FROM orders
+            WHERE status IN ('DELIVERED', 'COMPLETED')
+            ORDER BY id DESC
+            LIMIT 10000
+            """
+        ).fetchall()
+    except Exception:
+        return summary
+
+    for order in orders:
+        settlement = calculate_order_settlement(order)
+        payment_method = _text(_row_get(order, "payment_method", "COD"), "COD").upper()
+        payment_status = _text(_row_get(order, "payment_status", "")).upper()
+
+        total_twd = settlement["total_twd"]
+        store_platform_fee = settlement["store_platform_fee_twd"]
+        driver_platform_fee = settlement["driver_platform_fee_twd"]
+        admin_revenue = settlement["admin_total_receivable_twd"]
+
+        summary["completed_orders_count"] += 1
+        summary["total_order_twd"] += total_twd
+
+        summary["store_platform_fee_twd"] += store_platform_fee
+        summary["driver_platform_fee_twd"] += driver_platform_fee
+        summary["admin_revenue_twd"] += admin_revenue
+
+        if settlement.get("manual_review"):
+            summary["manual_review_orders"] += 1
+
+        if payment_method == "COD":
+            # COD V2:
+            # Store platform fee is owed by Store to Admin.
+            # Driver platform fee is owed by Driver to Admin.
+            # This field name is kept for old template compatibility.
+            summary["cod_admin_receivable_from_driver_twd"] += driver_platform_fee
+
+        elif payment_method in {"BANK_TRANSFER", "PLATFORM"} and payment_status == "PAID":
+            # Platform/Admin already holds customer payment.
+            platform_pay_store = settlement["store_net_after_settlement_twd"]
+            platform_pay_driver = settlement["platform_pay_driver_twd"]
+
+            summary["platform_customer_collected_twd"] += total_twd
+            summary["platform_pay_store_twd"] += platform_pay_store
+            summary["platform_pay_driver_twd"] += platform_pay_driver
+
+            platform_keep = max(0, total_twd - platform_pay_store - platform_pay_driver)
+            summary["platform_keep_revenue_twd"] += platform_keep
+
+        elif payment_method in {"PREPAID_TO_STORE"}:
+            summary["manual_review_orders"] += 1
+
+    summary["platform_cash_after_payables_twd"] = max(
+        0,
+        summary["platform_customer_collected_twd"]
+        - summary["platform_pay_store_twd"]
+        - summary["platform_pay_driver_twd"],
+    )
+
+    return summary
