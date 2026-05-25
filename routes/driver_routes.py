@@ -1161,7 +1161,7 @@ def order_detail(order_code):
                 flash("已進入退回店家流程，請依導航返回店家。", "warning")
                 return redirect("/driver?board=delivery")
 
-                        if action == "returned_to_store":
+            if action == "returned_to_store":
                 _confirm_returned_to_store(
                     db,
                     user=user,
