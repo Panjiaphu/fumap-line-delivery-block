@@ -504,6 +504,15 @@ def _ensure_mvp_columns(conn):
             ("payment_method", "payment_method TEXT DEFAULT 'BANK_TRANSFER'"),
             ("admin_bank_snapshot_json", "admin_bank_snapshot_json TEXT"),
             ("target_payout_snapshot_json", "target_payout_snapshot_json TEXT"),
+
+            # Phase 6 Lite: Store/Driver reports payment to Admin.
+            # This does NOT mean PAID_CONFIRMED.
+            # Only Admin confirm-paid can finalize settlement.
+            ("target_marked_paid_at", "target_marked_paid_at TEXT"),
+            ("target_marked_paid_note", "target_marked_paid_note TEXT"),
+            ("target_payment_method", "target_payment_method TEXT"),
+            ("target_payment_proof_image_url", "target_payment_proof_image_url TEXT"),
+
             ("related_order_codes_json", "related_order_codes_json TEXT"),
             ("note", "note TEXT"),
             ("created_at", "created_at TEXT"),
@@ -536,6 +545,7 @@ def _ensure_mvp_columns(conn):
             add_column_if_missing(conn, table, column_name, column_sql)
 
     _backfill_defaults(conn)
+
 
 def _backfill_defaults(conn):
     updates = [
@@ -659,6 +669,9 @@ def _backfill_defaults(conn):
         SET amount_twd = COALESCE(amount_twd, 0),
             status = COALESCE(NULLIF(status, ''), 'DRAFT'),
             payment_method = COALESCE(NULLIF(payment_method, ''), 'BANK_TRANSFER'),
+            target_payment_method = COALESCE(NULLIF(target_payment_method, ''), 'BANK_TRANSFER'),
+            target_marked_paid_note = COALESCE(target_marked_paid_note, ''),
+            target_payment_proof_image_url = COALESCE(target_payment_proof_image_url, ''),
             created_at = COALESCE(NULLIF(created_at, ''), datetime('now', '+8 hours')),
             updated_at = COALESCE(NULLIF(updated_at, ''), datetime('now', '+8 hours'))
         """,
@@ -777,6 +790,7 @@ def _ensure_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_settlement_batches_period ON settlement_batches(period_start, period_end)",
         "CREATE INDEX IF NOT EXISTS idx_settlement_batches_created_at ON settlement_batches(created_at)",
         "CREATE INDEX IF NOT EXISTS idx_settlement_batches_target_email ON settlement_batches(target_email)",
+        "CREATE INDEX IF NOT EXISTS idx_settlement_batches_target_marked_paid_at ON settlement_batches(target_marked_paid_at)",
 
         "CREATE INDEX IF NOT EXISTS idx_system_flags_key ON system_flags(flag_key)",
 
@@ -792,4 +806,3 @@ def _ensure_indexes(conn):
             conn.execute(sql)
         except sqlite3.OperationalError:
             continue
-            
