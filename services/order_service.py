@@ -586,22 +586,20 @@ def create_customer_order(
         raise OrderError("請輸入樓層，例如：1樓、5樓、無電梯。")
 
     has_cum_bind = bool(customer_can_photo_proof(db, customer_user))
+    email_verified = bool(_row_get(customer_user, "email_verified_at", ""))
 
     payment_method = normalize_payment_method(payment_method)
     delivery_method = normalize_delivery_method(delivery_method)
 
-    if not has_cum_bind:
-        if delivery_method != "FACE_TO_FACE":
-            raise OrderError("尚未綁定 CUM LINE，只能選擇當面交付。")
+    # Email-first rule:
+    # - BANK_TRANSFER requires verified Email, not LINE bind.
+    # - PHOTO_PROOF requires verified Email, not LINE bind.
+    # - LINE bind is optional and only adds LINE notification.
+    if payment_method == "BANK_TRANSFER" and not email_verified:
+        raise OrderError("請先完成 Email 驗證後，才能使用轉帳付款。")
 
-        if payment_method != "COD":
-            raise OrderError("尚未綁定 CUM LINE，只能使用貨到付款。")
-
-    if delivery_method == "PHOTO_PROOF" and not has_cum_bind:
-        raise OrderError("尚未綁定 CUM LINE，只能選擇當面交付。")
-
-    if payment_method == "BANK_TRANSFER" and not has_cum_bind:
-        raise OrderError("尚未綁定 CUM LINE，只能使用貨到付款。")
+    if delivery_method == "PHOTO_PROOF" and not email_verified:
+        raise OrderError("請先完成 Email 驗證後，才能使用拍照完成。")
 
     subtotal_twd = _money(product["price_twd"]) * qty
 
@@ -856,6 +854,8 @@ def create_customer_order(
             "payment_method": payment_method,
             "payment_status": payment_status,
             "delivery_method": delivery_method,
+            "email_verified": email_verified,
+            "line_bind_optional": True,
             "has_cum_bind": has_cum_bind,
             "invoice_required": invoice_data["invoice_required"],
             "invoice_type": invoice_data["invoice_type"],
