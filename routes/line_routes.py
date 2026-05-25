@@ -16,7 +16,10 @@ from services.line_notify_service import (
     push_to_role_target,
     push_user_bind_success,
 )
-from services.email_service import send_line_bind_success_email
+from services.email_service import (
+    send_admin_line_bind_success_email,
+    send_line_bind_success_email,
+)
 
 
 line_bp = Blueprint("line", __name__, url_prefix="/line")
@@ -26,6 +29,24 @@ def _safe_text(value, default=""):
     value = "" if value is None else str(value)
     value = value.strip()
     return value if value else default
+
+
+def _result_ok(result):
+    """
+    Normalize notification result.
+
+    LINE helper usually returns:
+    {"ok": True/False, "skipped": True/False, ...}
+
+    Email helper returns True/False.
+    """
+    if isinstance(result, bool):
+        return result
+
+    if isinstance(result, dict):
+        return bool(result.get("ok")) and not bool(result.get("skipped"))
+
+    return bool(result)
 
 
 def _user_email(user):
@@ -65,7 +86,7 @@ def _liff_id():
 
 def _notify_admin_line_bind_success(db, *, user, ctx, binding):
     """
-    Notify Admin directly after One-Tap LINE bind.
+    Notify Admin by LINE direct after One-Tap LINE bind.
 
     Uses FGO_ADMIN_LINE_USER_ID through push_admin_direct().
     Failure must not rollback bind.
@@ -101,8 +122,29 @@ def _notify_admin_line_bind_success(db, *, user, ctx, binding):
         )
 
     except Exception as exc:
-        print(f"[LINE_BIND][ADMIN_NOTIFY][ERROR] {exc}")
+        print(f"[LINE_BIND][ADMIN_LINE_NOTIFY][ERROR] {exc}")
         return {"ok": False, "error": str(exc)}
+
+
+def _notify_admin_line_bind_success_by_email(*, user, ctx, binding):
+    """
+    Notify Admin by Email after One-Tap LINE bind.
+
+    Failure must not rollback bind.
+    """
+    try:
+        return send_admin_line_bind_success_email(
+            user=user,
+            role=ctx.get("role", ""),
+            role_label=ctx.get("role_label", ""),
+            target_code=ctx.get("target_code", ""),
+            line_display_name=binding["line_display_name"] if binding else "",
+            contact_code=binding["contact_code"] if binding else "",
+        )
+
+    except Exception as exc:
+        print(f"[LINE_BIND][ADMIN_EMAIL_NOTIFY][ERROR] {exc}")
+        return False
 
 
 def _notify_user_line_bind_success(db, *, user, ctx, binding):
@@ -115,8 +157,11 @@ def _notify_user_line_bind_success(db, *, user, ctx, binding):
     role_label = ctx.get("role_label", role)
     target_code = ctx.get("target_code", "")
 
+    line_result = {"ok": False, "skipped": True}
+    email_result = False
+
     try:
-        push_user_bind_success(
+        line_result = push_user_bind_success(
             db,
             role=role,
             target_code=target_code,
@@ -125,12 +170,13 @@ def _notify_user_line_bind_success(db, *, user, ctx, binding):
         )
     except Exception as exc:
         print(f"[LINE_BIND][USER_LINE_NOTIFY][ERROR] {exc}")
+        line_result = {"ok": False, "error": str(exc)}
 
     try:
         email = _user_email(user)
 
         if email:
-            send_line_bind_success_email(
+            email_result = send_line_bind_success_email(
                 email,
                 role=role,
                 role_label=role_label,
@@ -140,6 +186,14 @@ def _notify_user_line_bind_success(db, *, user, ctx, binding):
             )
     except Exception as exc:
         print(f"[LINE_BIND][USER_EMAIL_NOTIFY][ERROR] {exc}")
+        email_result = False
+
+    return {
+        "user_line_result": line_result,
+        "user_email_result": email_result,
+        "user_line_notified": _result_ok(line_result),
+        "user_email_notified": _result_ok(email_result),
+    }
 
 
 @line_bp.get("/bind")
@@ -240,8 +294,8 @@ def bind_one_tap():
     Backend:
     - validates logged-in webapp user
     - binds LINE userId to current role/target_code
-    - notifies Admin direct
-    - notifies user by LINE and Email
+    - notifies Admin by LINE + Email
+    - notifies user by LINE + Email
     """
     db = get_db()
     user = current_user()
@@ -283,14 +337,20 @@ def bind_one_tap():
         ctx = current_user_line_context(db, user)
 
         # Notification must not rollback bind.
-        _notify_admin_line_bind_success(
+        admin_line_result = _notify_admin_line_bind_success(
             db,
             user=user,
             ctx=ctx,
             binding=binding,
         )
 
-        _notify_user_line_bind_success(
+        admin_email_result = _notify_admin_line_bind_success_by_email(
+            user=user,
+            ctx=ctx,
+            binding=binding,
+        )
+
+        user_notify = _notify_user_line_bind_success(
             db,
             user=user,
             ctx=ctx,
@@ -306,6 +366,16 @@ def bind_one_tap():
                 "active": ctx["active"],
                 "contact_code": binding["contact_code"],
                 "line_display_name": binding["line_display_name"],
+                "user_line_notified": bool(user_notify.get("user_line_notified")),
+                "user_email_notified": bool(user_notify.get("user_email_notified")),
+                "admin_line_notified": _result_ok(admin_line_result),
+                "admin_email_notified": _result_ok(admin_email_result),
+                "notification": {
+                    "user_line": user_notify.get("user_line_result"),
+                    "user_email": bool(user_notify.get("user_email_result")),
+                    "admin_line": admin_line_result,
+                    "admin_email": bool(admin_email_result),
+                },
                 "note": "LINE bound for notification only. No login, no account creation, no permission grant.",
             }
         )
@@ -380,9 +450,11 @@ def api_status():
     db = get_db()
     user = current_user()
 
+    if not user:
+        return jsonify({"ok": False, "error": "login required"}), 401
+
     try:
         ctx = current_user_line_context(db, user)
-        binding = ctx.get("binding")
 
         return jsonify(
             {
@@ -392,195 +464,82 @@ def api_status():
                 "target_code": ctx["target_code"],
                 "active": ctx["active"],
                 "contact_code": ctx["contact_code"],
-                "binding": dict(binding) if binding else None,
-                "note": "LINE is notification contact only. It does not grant permission.",
+                "line_display_name": ctx["line_display_name"],
             }
         )
 
     except Exception as exc:
-        return jsonify(
-            {
-                "ok": False,
-                "error": str(exc),
-            }
-        ), 400
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
-@line_bp.post("/api/bind")
+@line_bp.get("/contacts")
 @login_required
-def api_bind():
-    """
-    Backward-compatible API bind route.
-    Prefer /line/bind/one-tap for LIFF.
-    """
-    db = get_db()
+def contacts_page():
     user = current_user()
-    payload = request.get_json(silent=True) or {}
 
-    if not user:
-        return jsonify({"ok": False, "error": "login required"}), 401
+    if not user or user["role"] != "ADMIN_OPERATOR":
+        flash("只有 Admin 可以查看 LINE 綁定清單。", "danger")
+        return redirect(role_home(user["role"] if user else "CUSTOMER"))
 
-    try:
-        binding = bind_line_contact(
-            db,
-            user=user,
-            line_user_id=payload.get("line_user_id") or payload.get("userId") or "",
-            line_display_name=payload.get("line_display_name") or payload.get("displayName") or "",
-            commit=True,
-        )
-
-        return jsonify(
-            {
-                "ok": True,
-                "binding": dict(binding),
-                "contact_code": binding["contact_code"],
-                "note": "LINE bound for notification only. No login, no account creation, no permission grant.",
-            }
-        )
-
-    except Exception as exc:
-        db.rollback()
-        return jsonify(
-            {
-                "ok": False,
-                "error": str(exc),
-            }
-        ), 400
-
-
-@line_bp.get("/api/check")
-def api_check():
-    """
-    Public-safe check for internal debugging.
-
-    This does not grant login or permission.
-    """
     db = get_db()
-    role = (request.args.get("role") or "").strip().upper()
-    target_code = (request.args.get("target_code") or "").strip().upper()
+    rows = list_bindings(db, limit=200)
 
-    if not role or not target_code:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "role and target_code required",
-            }
-        ), 400
-
-    binding = get_active_binding_by_role_target(db, role, target_code)
-
-    return jsonify(
-        {
-            "ok": True,
-            "active": bool(binding),
-            "binding": dict(binding) if binding else None,
-            "note": "This endpoint only checks LINE contact binding. It does not authenticate users.",
-        }
+    return render_template(
+        "mobile/line/contacts.html",
+        bindings=rows,
     )
 
 
-@line_bp.post("/api/test-push")
+@line_bp.get("/contact/<role>/<target_code>")
 @login_required
-def api_test_push():
-    db = get_db()
+def contact_detail(role, target_code):
     user = current_user()
 
-    if not user:
-        return jsonify({"ok": False, "error": "login required"}), 401
+    if not user or user["role"] != "ADMIN_OPERATOR":
+        flash("只有 Admin 可以查看 LINE 綁定資料。", "danger")
+        return redirect(role_home(user["role"] if user else "CUSTOMER"))
 
-    try:
-        ctx = current_user_line_context(db, user)
+    db = get_db()
+    binding = get_active_binding_by_role_target(db, role, target_code)
 
-        if not ctx["active"]:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "LINE binding inactive",
-                }
-            ), 400
+    if not binding:
+        flash("找不到有效 LINE 綁定。", "warning")
+        return redirect("/line/contacts")
 
-        result = push_to_role_target(
-            db,
-            role=ctx["role"],
-            target_code=ctx["target_code"],
-            event_type="TEST_PUSH",
-            message=(
-                "FUMAP GO 測試通知\n\n"
-                f"角色：{ctx['role_label']}\n"
-                f"通知代碼：{ctx['contact_code']}\n\n"
-                "LINE 只用於通知，不用於登入或授權。"
-            ),
-            commit=True,
-        )
-
-        return jsonify(
-            {
-                "ok": bool(result.get("ok")),
-                "result": result,
-            }
-        )
-
-    except Exception as exc:
-        db.rollback()
-        return jsonify(
-            {
-                "ok": False,
-                "error": str(exc),
-            }
-        ), 400
+    return render_template(
+        "mobile/line/contact_detail.html",
+        binding=binding,
+    )
 
 
-@line_bp.post("/api/test-admin-push")
+@line_bp.post("/contact/<role>/<target_code>/test")
 @login_required
-def api_test_admin_push():
-    """
-    Test FGO_ADMIN_LINE_USER_ID direct push.
-    Only Admin operator should use this.
-    """
-    if session.get("role") != "ADMIN_OPERATOR":
+def contact_test(role, target_code):
+    user = current_user()
+
+    if not user or user["role"] != "ADMIN_OPERATOR":
         return jsonify({"ok": False, "error": "admin only"}), 403
 
     db = get_db()
 
     try:
-        result = push_admin_direct(
+        result = push_to_role_target(
             db,
-            event_type="TEST_ADMIN_DIRECT_PUSH",
-            message=(
-                "FUMAP GO Admin Direct Push 測試\n"
-                "如果您收到此訊息，代表 FGO_ADMIN_LINE_USER_ID 與 LINE Gateway 正常。"
-            ),
+            role=role,
+            target_code=target_code,
+            event_type="LINE_TEST",
             order_code="",
+            message=(
+                "FUMAP GO 測試通知\n"
+                f"角色：{role}\n"
+                f"代碼：{target_code}\n"
+                "如果您收到此訊息，代表 LINE 通知已可正常接收。"
+            ),
             commit=True,
         )
 
-        return jsonify(
-            {
-                "ok": bool(result.get("ok")),
-                "result": result,
-            }
-        )
+        return jsonify({"ok": bool(result.get("ok")), "result": result})
 
     except Exception as exc:
         db.rollback()
         return jsonify({"ok": False, "error": str(exc)}), 400
-
-
-@line_bp.get("/debug")
-def debug_list():
-    """
-    Lightweight debug page.
-    Only available if logged in as admin operator.
-    """
-    if session.get("role") != "ADMIN_OPERATOR":
-        flash("此頁面僅限 Admin。", "danger")
-        return redirect(role_home(session.get("role")))
-
-    rows = list_bindings(get_db(), limit=200)
-
-    return jsonify(
-        {
-            "ok": True,
-            "bindings": [dict(row) for row in rows],
-        }
-    )
