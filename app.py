@@ -38,6 +38,24 @@ def _render_service_name():
     )
 
 
+def _print_route_map(app):
+    """
+    Print all registered routes at boot.
+
+    Purpose:
+    - Confirm Render is running the correct app.py.
+    - Confirm /, /show, /store, /store/realtime/status, /v2/events/poll exist.
+    - Detect missing blueprint registration.
+    """
+    print("[BOOT][ROUTES] ------------------------------")
+
+    for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
+        methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
+        print(f"[BOOT][ROUTES] {methods:10s} {rule.rule:40s} -> {rule.endpoint}")
+
+    print("[BOOT][ROUTES] ------------------------------")
+
+
 def register_boot_diagnostics(app):
     """
     Render boot diagnostics.
@@ -77,31 +95,6 @@ def register_boot_diagnostics(app):
         f"{app.config.get('SESSION_COOKIE_SAMESITE', '')}"
     )
     print("[BOOT][DIAG] ------------------------------")
-
-
-def create_app():
-    app = Flask(__name__)
-    app.config.from_object(Config)
-
-    register_boot_diagnostics(app)
-
-    app.permanent_session_lifetime = timedelta(
-        days=int(app.config.get("PERMANENT_SESSION_LIFETIME_DAYS", 30))
-    )
-
-    app.teardown_appcontext(close_db)
-
-    register_upload_routes(app)
-    register_health_routes(app)
-
-    with app.app_context():
-        init_db(app)
-
-    register_context(app)
-    register_routes(app)
-    _print_route_map(app)
-
-    return app
 
 
 def register_upload_routes(app):
@@ -242,12 +235,14 @@ def register_context(app):
         user_id = session.get("user_id")
         display_name = session.get("display_name", "")
 
+        is_logged_in = user_id is not None or role == "ADMIN_OPERATOR"
+
         return {
             "APP_NAME": app.config.get("APP_NAME", "FUMAP GO"),
             "current_role": role,
             "current_user_id": user_id,
             "current_display_name": display_name,
-            "is_logged_in": bool(user_id),
+            "is_logged_in": is_logged_in,
             "is_admin": role == "ADMIN_OPERATOR",
             "request_path": request.path,
         }
@@ -262,14 +257,33 @@ def register_context(app):
         return f"{amount:,} TWD"
 
 
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+
+    register_boot_diagnostics(app)
+
+    app.permanent_session_lifetime = timedelta(
+        days=int(app.config.get("PERMANENT_SESSION_LIFETIME_DAYS", 30))
+    )
+
+    app.teardown_appcontext(close_db)
+
+    register_upload_routes(app)
+    register_health_routes(app)
+
+    with app.app_context():
+        init_db(app)
+
+    register_context(app)
+    register_routes(app)
+    _print_route_map(app)
+
+    return app
+
+
 app = create_app()
 
-def _print_route_map(app):
-    print("[BOOT][ROUTES] ------------------------------")
-    for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
-        methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
-        print(f"[BOOT][ROUTES] {methods:10s} {rule.rule:40s} -> {rule.endpoint}")
-    print("[BOOT][ROUTES] ------------------------------")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
