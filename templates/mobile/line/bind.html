@@ -225,7 +225,6 @@
   async function postOneTapBind(profile){
     const res = await fetch("/line/bind/one-tap", {
       method: "POST",
-      credentials: "same-origin",
       headers: {
         "Content-Type": "application/json"
       },
@@ -309,7 +308,6 @@
 
       const res = await fetch("/line/bind/request", {
         method: "POST",
-        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json"
         },
@@ -351,7 +349,6 @@ async function testPush(){
   try {
     const res = await fetch("/line/api/test-push", {
       method: "POST",
-      credentials: "same-origin",
       headers: {
         "Content-Type": "application/json"
       },

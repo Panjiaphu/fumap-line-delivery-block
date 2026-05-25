@@ -1,50 +1,52 @@
 {% extends "mobile/layout.html" %}
 
 {% block title %}建立訂單｜{{ APP_NAME }}{% endblock %}
-{% block subtitle %}免註冊即可下單，Email 是主要通知方式{% endblock %}
+{% block subtitle %}送出後訂單會進入店家工作台或等待 Admin 確認付款{% endblock %}
 
 {% block content %}
 {% set bh = store.business_hours_status if store.business_hours_status is defined else business_hours_status %}
-{% set safe_user = user if user else None %}
-{% set initial_email = customer_email or (safe_user.email if safe_user and safe_user.email else '') %}
 
 <section class="card">
   <h2>{{ store.store_name }}</h2>
-  <p class="muted" style="line-height:1.75;">
+  <p class="muted">
     {{ store.address or '-' }}<br>
     區域：{{ store.area_label or '中壢區' }}
   </p>
 
-  <div style="display:flex;gap:8px;flex-wrap:wrap;">
-    {% if store.accepting_orders %}
-      <span class="badge ok">目前可接單</span>
-    {% else %}
-      <span class="badge warn">{{ store.accepting_orders_label or '目前不接單' }}</span>
-    {% endif %}
+  {% if store.accepting_orders %}
+    <span class="badge ok">目前可接單</span>
+  {% else %}
+    <span class="badge warn">{{ store.accepting_orders_label or '目前不接單' }}</span>
+  {% endif %}
 
-    {% if bh %}
-      <span class="badge">今日 {{ bh.open_time }} - {{ bh.close_time }}</span>
-      <span class="badge">最後接單 {{ bh.cutoff_time }}</span>
-    {% endif %}
+  {% if bh %}
+    <span class="badge">今日 {{ bh.open_time }} - {{ bh.close_time }}</span>
+    <span class="badge">最後接單 {{ bh.cutoff_time }}</span>
+  {% endif %}
 
-    {% if store.store_lat and store.store_lng %}
-      <span class="badge ok">店家 GPS 已設定</span>
-    {% else %}
-      <span class="badge warn">店家 GPS 未設定</span>
-    {% endif %}
+  {% if store.store_lat and store.store_lng %}
+    <span class="badge ok">店家 GPS 已設定</span>
+  {% else %}
+    <span class="badge warn">店家 GPS 未設定</span>
+  {% endif %}
 
-    {% if is_guest_checkout %}
-      <span class="badge ok">免註冊下單</span>
-    {% else %}
-      <span class="badge ok">客戶帳號下單</span>
-    {% endif %}
+  {% if email_verified %}
+    <span class="badge ok">Email 已驗證</span>
+    <span class="badge ok">可使用轉帳</span>
+    <span class="badge ok">可上傳付款證明</span>
+  {% else %}
+    <span class="badge warn">Email 尚未驗證</span>
+    <span class="badge warn">轉帳暫不可用</span>
+    <span class="badge warn">僅可使用 COD</span>
+  {% endif %}
 
-    {% if has_cum_bind %}
-      <span class="badge ok">LINE 已綁定，可額外推播</span>
-    {% else %}
-      <span class="badge">LINE 非必要</span>
-    {% endif %}
-  </div>
+  {% if has_cum_bind %}
+    <span class="badge ok">已綁定 LINE</span>
+    <span class="badge ok">可接收 LINE 通知</span>
+  {% else %}
+    <span class="badge">尚未綁定 LINE</span>
+    <span class="badge">仍可用 Email 通知</span>
+  {% endif %}
 </section>
 
 
@@ -70,15 +72,28 @@
 
 <section class="card">
   <h2>下單規則</h2>
-  <p class="muted" style="line-height:1.8;">
-    不需要註冊帳號即可下單。Email 是主要通知方式，方便接收訂單、付款與後續狀態通知。<br>
-    有填寫有效 Email，即可使用轉帳付款與拍照完成。<br>
-    LINE 綁定只是額外推播，不是下單、轉帳或拍照完成的必要條件。
-  </p>
 
-  {% if is_guest_checkout %}
-    <p class="muted" style="line-height:1.8;color:#0f766e;font-weight:800;">
-      訪客下單完成後，系統會提供一個訂單追蹤頁。請保留該頁面連結，以便查看訂單狀態。
+  {% if email_verified %}
+    <p class="muted">
+      您的 Email 已驗證，可選擇貨到付款或轉帳付款。
+      選擇轉帳時，請先依平台帳戶資訊付款，並上傳轉帳證明圖片。
+      付款證明會送交 Admin 確認；確認前訂單會暫停，店家不會先處理。
+    </p>
+  {% else %}
+    <p class="muted">
+      您尚未完成 Email 驗證。為了保護付款與通知流程，
+      目前只能使用貨到付款 COD。
+      完成 Email 驗證後，才能使用轉帳付款與上傳付款證明。
+    </p>
+  {% endif %}
+
+  {% if has_cum_bind %}
+    <p class="muted">
+      您已綁定 LINE。若使用轉帳，系統會同時透過 Email 與 LINE 通知付款狀態。
+    </p>
+  {% else %}
+    <p class="muted">
+      LINE 綁定不是必要條件。未綁定 LINE 時，系統仍會用 Email 通知付款狀態。
     </p>
   {% endif %}
 
@@ -88,9 +103,10 @@
 </section>
 
 
-<section class="card bank-transfer-card" id="bankInfoCard" style="display:none;">
+{% if can_bank_transfer %}
+<section class="card bank-transfer-card">
   <h2>轉帳給 Admin</h2>
-  <p class="muted" style="line-height:1.8;">
+  <p class="muted">
     選擇轉帳付款時，請依下方資訊付款，並在本頁上傳轉帳證明圖片。
     Admin 確認付款後，店家才會開始處理訂單。
   </p>
@@ -117,7 +133,7 @@
     </div>
   </div>
 
-  <p class="muted" style="line-height:1.8;">
+  <p class="muted">
     帳戶資訊：{{ platform_payment_info.payment_account or '-' }}<br>
     備註：{{ platform_payment_info.bank_note or '請轉帳後上傳付款截圖，等待 Admin 確認。' }}
   </p>
@@ -132,6 +148,15 @@
     </a>
   {% endif %}
 </section>
+{% else %}
+<section class="card" style="background:#fff7ed;border-color:#fed7aa;">
+  <h2>轉帳付款尚未開放</h2>
+  <p class="muted">
+    請先完成 Email 驗證後，才能使用轉帳付款與上傳轉帳證明。
+  </p>
+  <a class="btn secondary" href="/account/email/resend">重新寄送 Email 驗證信</a>
+</section>
+{% endif %}
 
 
 <section class="card">
@@ -151,60 +176,24 @@
 
     <div class="form-group">
       <label>數量</label>
-      <input
-        name="qty"
-        id="qtyInput"
-        type="number"
-        min="1"
-        value="1"
-        required
-        {% if not store.accepting_orders %}disabled{% endif %}
-      >
+      <input name="qty" id="qtyInput" type="number" min="1" value="1" required {% if not store.accepting_orders %}disabled{% endif %}>
     </div>
 
     <div class="form-group">
       <label>姓名</label>
-      <input
-        name="customer_name"
-        required
-        value="{{ safe_user.display_name if safe_user else '' }}"
-        placeholder="請輸入姓名"
-        {% if not store.accepting_orders %}disabled{% endif %}
-      >
+      <input name="customer_name" required value="{{ user.display_name or '' }}" {% if not store.accepting_orders %}disabled{% endif %}>
     </div>
 
     <div class="form-group">
       <label>電話</label>
-      <input
-        name="customer_phone"
-        required
-        inputmode="tel"
-        value="{{ safe_user.phone if safe_user else '' }}"
-        placeholder="請輸入可聯絡電話"
-        {% if not store.accepting_orders %}disabled{% endif %}
-      >
-    </div>
-
-    <div class="form-group">
-      <label>Email <span class="muted">主要通知方式</span></label>
-      <input
-        name="customer_email"
-        id="customerEmailInput"
-        type="email"
-        value="{{ initial_email }}"
-        placeholder="請輸入 Email，方便接收訂單與付款通知"
-        {% if not store.accepting_orders %}disabled{% endif %}
-      >
-      <p class="muted" id="emailHelpText" style="line-height:1.7;">
-        有填寫有效 Email，即可使用轉帳付款與拍照完成。未填 Email 時仍可使用 COD + 當面交付。
-      </p>
+      <input name="customer_phone" required value="{{ user.phone or '' }}" {% if not store.accepting_orders %}disabled{% endif %}>
     </div>
 
     <div class="form-group">
       <label>配送區域</label>
       <select name="city_block" {% if not store.accepting_orders %}disabled{% endif %}>
-        <option value="ZHONGLI" {% if store.city_block == 'ZHONGLI' %}selected{% endif %}>中壢區</option>
-        <option value="TAOYUAN" {% if store.city_block == 'TAOYUAN' %}selected{% endif %}>桃園區</option>
+        <option value="ZHONGLI">中壢區</option>
+        <option value="TAOYUAN">桃園區</option>
       </select>
       <p class="muted">
         系統會優先使用 GPS 計算距離；GPS 不足時才使用距離級距。
@@ -289,11 +278,23 @@
       <label>付款方式</label>
       <select name="payment_method" id="paymentMethodSelect" {% if not store.accepting_orders %}disabled{% endif %}>
         <option value="COD">貨到付款 COD</option>
-        <option value="BANK_TRANSFER">轉帳給 Admin｜需有效 Email</option>
+        {% if can_bank_transfer %}
+          <option value="BANK_TRANSFER">轉帳給 Admin</option>
+        {% else %}
+          <option value="BANK_TRANSFER" disabled>轉帳給 Admin｜需 Email 驗證</option>
+        {% endif %}
       </select>
-      <p class="muted" id="paymentHelpText" style="line-height:1.7;">
-        COD 不需要 Email。轉帳付款需要有效 Email，方便 Admin 管理與通知付款狀態。
-      </p>
+
+      {% if not can_bank_transfer %}
+        <p class="muted" style="color:#b45309;font-weight:800;">
+          請先完成 Email 驗證後，才能使用轉帳付款。
+        </p>
+      {% else %}
+        <p class="muted">
+          選擇轉帳後，請依上方銀行資訊付款，並上傳轉帳證明。
+          Admin 確認付款後，店家才會處理訂單。
+        </p>
+      {% endif %}
     </div>
 
     <section
@@ -317,21 +318,26 @@
           {% if not store.accepting_orders %}disabled{% endif %}
         >
         <p class="muted">
-          若暫時無法上傳，也可以先建立訂單，之後聯絡 Admin 補交轉帳證明。
-          Admin 確認前，店家不會處理此訂單。
+          若暫時無法上傳，也可以先建立訂單，之後到「我的訂單」補上傳。
+          但 Admin 確認前，店家不會處理此訂單。
         </p>
       </div>
     </section>
 
     <div class="form-group">
       <label>交付方式</label>
-      <select name="delivery_method" id="deliveryMethodSelect" {% if not store.accepting_orders %}disabled{% endif %}>
+      <select name="delivery_method" {% if not store.accepting_orders %}disabled{% endif %}>
         <option value="FACE_TO_FACE">當面交付</option>
-        <option value="PHOTO_PROOF">拍照完成｜需有效 Email</option>
+        {% if can_photo_proof %}
+          <option value="PHOTO_PROOF">拍照完成</option>
+        {% endif %}
       </select>
-      <p class="muted" id="deliveryHelpText" style="line-height:1.7;">
-        拍照完成需要有效 Email，方便後續寄送或查詢完成證明。LINE 綁定不是必要條件。
-      </p>
+
+      {% if not can_photo_proof %}
+        <p class="muted">
+          完成 Email 驗證後，可開啟拍照完成選項。
+        </p>
+      {% endif %}
     </div>
 
     <div class="form-group">
@@ -476,10 +482,9 @@
 
 <section class="card">
   <h2>送出後流程</h2>
-  <p class="muted" style="line-height:1.8;">
-    COD 訂單建立後會自動出現在店家工作台。<br>
-    轉帳訂單會先等待 Admin 確認付款，確認後店家才會開始處理。<br>
-    訪客下單會進入公開追蹤頁，請保留完成頁連結。
+  <p class="muted">
+    COD 訂單建立後會自動出現在店家工作台。
+    轉帳訂單會先等待 Admin 確認付款，確認後店家才會開始處理。
   </p>
 </section>
 
@@ -493,17 +498,9 @@
   const help = document.getElementById("deliveryGpsHelp");
   const form = document.getElementById("customerCheckoutForm");
   const distanceBand = document.getElementById("distanceBandSelect");
-
-  const emailInput = document.getElementById("customerEmailInput");
-  const emailHelp = document.getElementById("emailHelpText");
   const paymentMethod = document.getElementById("paymentMethodSelect");
-  const bankInfoCard = document.getElementById("bankInfoCard");
-  const paymentHelp = document.getElementById("paymentHelpText");
   const paymentProofSection = document.getElementById("paymentProofSection");
   const paymentProofInput = document.getElementById("paymentProofInput");
-
-  const deliveryMethod = document.getElementById("deliveryMethodSelect");
-  const deliveryHelp = document.getElementById("deliveryHelpText");
 
   const invoiceToggle = document.getElementById("invoiceRequiredToggle");
   const invoiceFields = document.getElementById("invoiceFields");
@@ -512,71 +509,17 @@
   const invoiceTaxId = document.getElementById("invoiceTaxIdInput");
   const invoiceNote = document.getElementById("invoiceNoteInput");
 
-  function validEmail(value){
-    value = (value || "").trim().toLowerCase();
-
-    if (!value) return false;
-    if (value.length > 255) return false;
-    if (!value.includes("@")) return false;
-
-    const parts = value.split("@");
-    if (parts.length !== 2) return false;
-    if (!parts[0] || !parts[1]) return false;
-    if (!parts[1].includes(".")) return false;
-
-    return true;
-  }
-
-  function hasEmail(){
-    return validEmail(emailInput ? emailInput.value : "");
-  }
-
-  function updateEmailDependentOptions(){
-    const ok = hasEmail();
-
-    if (emailHelp) {
-      emailHelp.style.color = ok ? "#0f766e" : "";
-      emailHelp.style.fontWeight = ok ? "800" : "";
-      emailHelp.textContent = ok
-        ? "Email 格式有效。可使用轉帳付款與拍照完成。"
-        : "有填寫有效 Email，即可使用轉帳付款與拍照完成。未填 Email 時仍可使用 COD + 當面交付。";
-    }
-
-    if (paymentHelp) {
-      paymentHelp.style.color = ok ? "#0f766e" : "";
-      paymentHelp.style.fontWeight = ok ? "800" : "";
-      paymentHelp.textContent = ok
-        ? "可使用轉帳付款。請依平台資訊付款並上傳付款證明。"
-        : "COD 不需要 Email。轉帳付款需要有效 Email，方便 Admin 管理與通知付款狀態。";
-    }
-
-    if (deliveryHelp) {
-      deliveryHelp.style.color = ok ? "#0f766e" : "";
-      deliveryHelp.style.fontWeight = ok ? "800" : "";
-      deliveryHelp.textContent = ok
-        ? "可選擇拍照完成。LINE 綁定仍只是額外推播。"
-        : "拍照完成需要有效 Email，方便後續寄送或查詢完成證明。LINE 綁定不是必要條件。";
-    }
-
-    updatePaymentProofSection();
-  }
-
   function updatePaymentProofSection(){
     if (!paymentMethod || !paymentProofSection) {
       return;
     }
 
-    const paymentValue = paymentMethod.value;
-    const ok = hasEmail();
-
-    if (paymentValue === "BANK_TRANSFER" && ok) {
+    if (paymentMethod.value === "BANK_TRANSFER") {
       paymentProofSection.style.display = "";
-      if (bankInfoCard) bankInfoCard.style.display = "";
     } else {
       paymentProofSection.style.display = "none";
-      if (bankInfoCard) bankInfoCard.style.display = "none";
 
-      if (paymentProofInput && paymentValue !== "BANK_TRANSFER") {
+      if (paymentProofInput) {
         paymentProofInput.value = "";
       }
     }
@@ -603,11 +546,6 @@
     }
   }
 
-  if (emailInput) {
-    emailInput.addEventListener("input", updateEmailDependentOptions);
-    updateEmailDependentOptions();
-  }
-
   if (paymentMethod) {
     paymentMethod.addEventListener("change", updatePaymentProofSection);
     updatePaymentProofSection();
@@ -618,45 +556,70 @@
     updateInvoiceFields();
   }
 
-  if (gpsBtn && navigator.geolocation) {
+  if (invoiceTaxId) {
+    invoiceTaxId.addEventListener("input", function(){
+      invoiceTaxId.value = (invoiceTaxId.value || "").replace(/[^0-9]/g, "").slice(0, 8);
+    });
+  }
+
+  if (gpsBtn && latInput && lngInput && readout) {
+    function setMessage(message, isError){
+      readout.textContent = message;
+      readout.classList.toggle("gps-error", !!isError);
+    }
+
     gpsBtn.addEventListener("click", function(){
       if (!storeAccepting) {
+        setMessage("店家目前不接單，暫時不能建立新訂單。", true);
+        return;
+      }
+
+      if (!navigator.geolocation) {
+        setMessage("此瀏覽器不支援定位，請改用手機 Chrome 或 Safari。", true);
         return;
       }
 
       gpsBtn.disabled = true;
       gpsBtn.textContent = "定位中...";
-
-      if (help) {
-        help.textContent = "正在取得位置，請允許瀏覽器定位權限。";
-      }
+      setMessage("正在取得收貨位置，請允許瀏覽器定位。", false);
 
       navigator.geolocation.getCurrentPosition(
-        function(pos){
-          const lat = pos.coords.latitude.toFixed(6);
-          const lng = pos.coords.longitude.toFixed(6);
+        function(position){
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          const accuracy = position.coords.accuracy;
 
-          if (latInput) latInput.value = lat;
-          if (lngInput) lngInput.value = lng;
+          latInput.value = lat.toFixed(7);
+          lngInput.value = lng.toFixed(7);
 
-          if (readout) {
-            readout.textContent = "已取得座標：" + lat + ", " + lng;
-          }
+          setMessage(
+            "目前座標：" + lat.toFixed(6) + ", " + lng.toFixed(6) +
+            "｜誤差約 " + Math.round(accuracy) + " 公尺",
+            false
+          );
 
           if (help) {
-            help.textContent = "送出後系統會優先使用 GPS 計算距離。";
+            help.textContent = "定位已取得。送出訂單後，系統會優先用 GPS 計算距離。";
           }
 
           gpsBtn.disabled = false;
-          gpsBtn.textContent = "重新取得位置";
+          gpsBtn.textContent = "重新取得目前位置";
         },
-        function(err){
-          if (readout) {
-            readout.textContent = "定位失敗，請手動選擇距離級距。";
+        function(error){
+          let message = "定位失敗。";
+
+          if (error.code === 1) {
+            message = "定位被拒絕。請允許瀏覽器定位權限，或手動選擇距離級距。";
+          } else if (error.code === 2) {
+            message = "目前無法取得位置，請確認 GPS 或網路狀態，或手動選擇距離級距。";
+          } else if (error.code === 3) {
+            message = "定位逾時，請再試一次，或手動選擇距離級距。";
           }
 
+          setMessage(message, true);
+
           if (help) {
-            help.textContent = err && err.message ? err.message : "無法取得位置。";
+            help.textContent = "若無法定位，系統會使用你選擇的配送距離級距。";
           }
 
           gpsBtn.disabled = false;
@@ -664,48 +627,39 @@
         },
         {
           enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 0
+          timeout: 12000,
+          maximumAge: 30000
         }
       );
     });
-  } else if (gpsBtn) {
-    gpsBtn.disabled = true;
-
-    if (help) {
-      help.textContent = "此瀏覽器不支援 GPS 定位，請手動選擇距離級距。";
-    }
   }
 
   if (form) {
-    form.addEventListener("submit", function(e){
+    form.addEventListener("submit", function(event){
       if (!storeAccepting) {
-        e.preventDefault();
-        alert("店家目前無法接單。");
-        return;
-      }
-
-      const paymentValue = paymentMethod ? paymentMethod.value : "COD";
-      const deliveryValue = deliveryMethod ? deliveryMethod.value : "FACE_TO_FACE";
-      const ok = hasEmail();
-
-      if (paymentValue === "BANK_TRANSFER" && !ok) {
-        e.preventDefault();
-        alert("請輸入有效 Email 後，才能使用轉帳付款。");
-        if (emailInput) emailInput.focus();
-        return;
-      }
-
-      if (deliveryValue === "PHOTO_PROOF" && !ok) {
-        e.preventDefault();
-        alert("請輸入有效 Email 後，才能選擇拍照完成。");
-        if (emailInput) emailInput.focus();
+        event.preventDefault();
+        alert("店家目前無法接單，請於營業時間再下單。");
         return;
       }
 
       if (distanceBand && distanceBand.value === "OVER_6KM") {
-        e.preventDefault();
-        alert("超過 6 公里請先聯絡 Admin，系統不會自動建立訂單。");
+        event.preventDefault();
+        alert("超過 6 公里目前不自動建立訂單，請聯絡 Admin 處理。");
+        return;
+      }
+
+      if (invoiceToggle && invoiceToggle.checked) {
+        if (invoiceType && invoiceType.value === "NONE") {
+          event.preventDefault();
+          alert("請選擇收據 / 發票需求類型。");
+          return;
+        }
+
+        if (invoiceTaxId && invoiceTaxId.value && invoiceTaxId.value.length !== 8) {
+          event.preventDefault();
+          alert("統一編號需為 8 碼數字。若只是收據，可留空。");
+          return;
+        }
       }
     });
   }

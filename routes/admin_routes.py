@@ -1805,124 +1805,38 @@ def accounting():
 
     db = get_db()
 
-    def _safe_query_all(label, sql, params=None):
-        """
-        Admin accounting must never 500 because of optional accounting queries.
+    summary = admin_accounting_summary(db)
+    entries = list_admin_accounting_entries(db, limit=500)
 
-        Return [] when:
-        - accounting_entries has no rows.
-        - schema is older.
-        - a column/entry_type does not exist.
-        - SQL fails for any reason.
-        """
-        try:
-            return db.execute(sql, params or []).fetchall()
-        except Exception as exc:
-            print(f"[ADMIN_ACCOUNTING][{label}][ERROR] {exc}")
-            return []
-
-    def _safe_summary():
-        try:
-            return admin_accounting_summary(db)
-        except Exception as exc:
-            print(f"[ADMIN_ACCOUNTING][SUMMARY][ERROR] {exc}")
-            return {
-                "admin_revenue_twd": 0,
-                "entries_count": 0,
-                "store_platform_fee_twd": 0,
-                "driver_platform_fee_twd": 0,
-                "cod_admin_receivable_from_driver_twd": 0,
-                "platform_customer_collected_twd": 0,
-                "platform_keep_revenue_twd": 0,
-                "platform_pay_store_twd": 0,
-                "platform_pay_driver_twd": 0,
-                "platform_cash_after_payables_twd": 0,
-                "manual_review_orders": 0,
-                "today_entries_count": 0,
-                "month_entries_count": 0,
-                "today_amount_twd": 0,
-                "month_amount_twd": 0,
-                "total_amount_twd": 0,
-                "by_role": {},
-                "by_direction": {},
-                "recent_entries": [],
-            }
-
-    summary = _safe_summary()
-
-    try:
-        entries = list_admin_accounting_entries(db, limit=500)
-    except Exception as exc:
-        print(f"[ADMIN_ACCOUNTING][LIST_ENTRIES][ERROR] {exc}")
-        entries = []
-
-    order_summary = _safe_query_all(
-        "ORDER_SUMMARY",
+    order_summary = db.execute(
         """
         SELECT payment_method,
                payment_status,
                COUNT(*) AS count_orders,
-               SUM(COALESCE(total_twd, 0)) AS total_twd,
-               SUM(COALESCE(subtotal_twd, 0)) AS subtotal_twd,
-               SUM(COALESCE(base_delivery_fee_twd, 0)) AS base_delivery_fee_twd,
-               SUM(COALESCE(customer_delivery_share_twd, 0)) AS customer_delivery_share_twd,
-               SUM(COALESCE(store_delivery_support_twd, 0)) AS store_delivery_support_twd,
-               SUM(COALESCE(extra_fee_twd, 0)) AS extra_fee_twd,
-               SUM(COALESCE(rain_fee_twd, 0)) AS rain_fee_twd
+               SUM(total_twd) AS total_twd,
+               SUM(subtotal_twd) AS subtotal_twd,
+               SUM(base_delivery_fee_twd) AS base_delivery_fee_twd,
+               SUM(customer_delivery_share_twd) AS customer_delivery_share_twd,
+               SUM(store_delivery_support_twd) AS store_delivery_support_twd,
+               SUM(extra_fee_twd) AS extra_fee_twd,
+               SUM(rain_fee_twd) AS rain_fee_twd
         FROM orders
         GROUP BY payment_method, payment_status
         ORDER BY payment_method ASC, payment_status ASC
-        """,
-    )
+        """
+    ).fetchall()
 
-    store_rows = _safe_query_all(
-        "STORE_ROWS",
+    store_rows = db.execute(
         """
         SELECT ae.target_code AS store_code,
                COALESCE(s.store_name, '') AS store_name,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('STORE_GROSS_SALE')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS store_sales_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('STORE_DELIVERY_SUPPORT')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS store_delivery_support_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('STORE_PLATFORM_FEE')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS store_platform_fee_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('STORE_NET_RECEIVABLE', 'STORE_RECEIVABLE')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS store_net_receivable_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('COD_DRIVER_PAY_STORE_NET')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS receivable_from_driver_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('PLATFORM_PAY_STORE_NET', 'ADMIN_PAYOUT_STORE')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS receivable_from_platform_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('PREPAID_STORE_RECEIVED_SUBTOTAL')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS prepaid_received_twd,
-
+               SUM(CASE WHEN ae.entry_type = 'STORE_GROSS_SALE' THEN ae.amount_twd ELSE 0 END) AS store_sales_twd,
+               SUM(CASE WHEN ae.entry_type = 'STORE_DELIVERY_SUPPORT' THEN ae.amount_twd ELSE 0 END) AS store_delivery_support_twd,
+               SUM(CASE WHEN ae.entry_type = 'STORE_PLATFORM_FEE' THEN ae.amount_twd ELSE 0 END) AS store_platform_fee_twd,
+               SUM(CASE WHEN ae.entry_type = 'STORE_NET_RECEIVABLE' THEN ae.amount_twd ELSE 0 END) AS store_net_receivable_twd,
+               SUM(CASE WHEN ae.entry_type = 'COD_DRIVER_PAY_STORE_NET' THEN ae.amount_twd ELSE 0 END) AS receivable_from_driver_twd,
+               SUM(CASE WHEN ae.entry_type = 'PLATFORM_PAY_STORE_NET' THEN ae.amount_twd ELSE 0 END) AS receivable_from_platform_twd,
+               SUM(CASE WHEN ae.entry_type = 'PREPAID_STORE_RECEIVED_SUBTOTAL' THEN ae.amount_twd ELSE 0 END) AS prepaid_received_twd,
                COUNT(*) AS entry_count
         FROM accounting_entries ae
         LEFT JOIN stores s ON s.store_code = ae.target_code
@@ -1930,57 +1844,20 @@ def accounting():
         GROUP BY ae.target_code, s.store_name
         ORDER BY store_net_receivable_twd DESC, ae.target_code ASC
         LIMIT 200
-        """,
-    )
+        """
+    ).fetchall()
 
-    driver_rows = _safe_query_all(
-        "DRIVER_ROWS",
+    driver_rows = db.execute(
         """
         SELECT ae.target_code AS driver_code,
                COALESCE(d.driver_name, '') AS driver_name,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('DRIVER_GROSS_EARNING', 'DRIVER_INCOME')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS driver_gross_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('DRIVER_PLATFORM_FEE')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS driver_platform_fee_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('DRIVER_NET_EARNING')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS driver_net_income_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('COD_CUSTOMER_PAID_DRIVER')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS cod_collected_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('COD_DRIVER_PAY_STORE_NET')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS pay_store_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('COD_DRIVER_PAY_ADMIN', 'DRIVER_PLATFORM_FEE')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS pay_admin_twd,
-
-               SUM(CASE
-                   WHEN ae.entry_type IN ('PLATFORM_PAY_DRIVER_NET', 'ADMIN_PAYOUT_DRIVER')
-                   THEN COALESCE(ae.amount_twd, 0)
-                   ELSE 0
-               END) AS platform_pay_driver_twd,
-
+               SUM(CASE WHEN ae.entry_type = 'DRIVER_GROSS_EARNING' THEN ae.amount_twd ELSE 0 END) AS driver_gross_twd,
+               SUM(CASE WHEN ae.entry_type = 'DRIVER_PLATFORM_FEE' THEN ae.amount_twd ELSE 0 END) AS driver_platform_fee_twd,
+               SUM(CASE WHEN ae.entry_type = 'DRIVER_NET_EARNING' THEN ae.amount_twd ELSE 0 END) AS driver_net_income_twd,
+               SUM(CASE WHEN ae.entry_type = 'COD_CUSTOMER_PAID_DRIVER' THEN ae.amount_twd ELSE 0 END) AS cod_collected_twd,
+               SUM(CASE WHEN ae.entry_type = 'COD_DRIVER_PAY_STORE_NET' THEN ae.amount_twd ELSE 0 END) AS pay_store_twd,
+               SUM(CASE WHEN ae.entry_type = 'COD_DRIVER_PAY_ADMIN' THEN ae.amount_twd ELSE 0 END) AS pay_admin_twd,
+               SUM(CASE WHEN ae.entry_type = 'PLATFORM_PAY_DRIVER_NET' THEN ae.amount_twd ELSE 0 END) AS platform_pay_driver_twd,
                COUNT(*) AS entry_count
         FROM accounting_entries ae
         LEFT JOIN drivers d ON d.driver_code = ae.target_code
@@ -1988,11 +1865,10 @@ def accounting():
         GROUP BY ae.target_code, d.driver_name
         ORDER BY pay_admin_twd DESC, ae.target_code ASC
         LIMIT 200
-        """,
-    )
+        """
+    ).fetchall()
 
-    manual_review_orders = _safe_query_all(
-        "MANUAL_REVIEW_ORDERS",
+    manual_review_orders = db.execute(
         """
         SELECT o.*,
                s.store_code,
@@ -2008,18 +1884,17 @@ def accounting():
            OR o.payment_method = 'PREPAID_TO_STORE'
         ORDER BY o.id DESC
         LIMIT 100
-        """,
-    )
+        """
+    ).fetchall()
 
-    recent_entries = _safe_query_all(
-        "RECENT_ENTRIES",
+    recent_entries = db.execute(
         """
         SELECT *
         FROM accounting_entries
         ORDER BY id DESC
         LIMIT 300
-        """,
-    )
+        """
+    ).fetchall()
 
     return render_template(
         "mobile/admin/accounting.html",
@@ -2031,6 +1906,7 @@ def accounting():
         driver_rows=driver_rows,
         manual_review_orders=manual_review_orders,
     )
+
 
 @admin_bp.get("/blocks")
 @admin_required
