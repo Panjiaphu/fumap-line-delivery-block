@@ -252,14 +252,28 @@
 
       <form method="post" enctype="multipart/form-data">
         <div class="form-group">
-          <label>配送證明圖片（選填）</label>
+          <label>
+            {% if order.delivery_method == 'PHOTO_PROOF' %}
+              配送證明圖片（必填）
+            {% else %}
+              配送證明圖片（選填）
+            {% endif %}
+          </label>
+
           <input
             type="file"
             name="delivery_proof"
             accept="image/*"
+            capture="environment"
+            {% if order.delivery_method == 'PHOTO_PROOF' %}required{% endif %}
           >
+
           <p class="muted" style="margin-top:6px;">
-            圖片會保存在系統中，不會作為 Email 附件寄出。
+            {% if order.delivery_method == 'PHOTO_PROOF' %}
+              此單選擇拍照完成，請拍攝商品已送達或放置位置的照片。圖片會保存在系統中，Email 只會寄送訂單連結，不會將圖片作為附件寄出。
+            {% else %}
+              此單為當面交付，圖片為選填。若上傳圖片，系統會保存紀錄，Email 不會將圖片作為附件寄出。
+            {% endif %}
           </p>
         </div>
 
