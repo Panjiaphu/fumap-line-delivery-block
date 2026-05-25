@@ -18,6 +18,11 @@ from services.email_service import (
     send_driver_payment_request_email,
     send_store_payout_confirmed_email,
     send_driver_payout_confirmed_email,
+
+    # Phase 6 Lite: send confirmation email for both directions:
+    # - ADMIN_OWES_TARGET
+    # - TARGET_OWES_ADMIN
+    send_target_settlement_confirmed_email,
 )
 from services.settlement_service import (
     current_month_range,
@@ -37,9 +42,19 @@ from services.settlement_service import (
 
 
 try:
-    from services.line_notify_service import push_to_role_target
+    from services.line_notify_service import (
+        push_to_role_target,
+        push_settlement_payment_request_to_target,
+        push_target_settlement_confirmed,
+    )
 except Exception:
     def push_to_role_target(db, **kwargs):
+        return {"ok": False, "skipped": True, "error": "line notify unavailable"}
+
+    def push_settlement_payment_request_to_target(db, **kwargs):
+        return {"ok": False, "skipped": True, "error": "line notify unavailable"}
+
+    def push_target_settlement_confirmed(db, **kwargs):
         return {"ok": False, "skipped": True, "error": "line notify unavailable"}
 
 
@@ -462,13 +477,53 @@ def _settlement_line_message(settlement):
 
 
 def _push_settlement_line(db, settlement, event_type):
+    """
+    Phase 6 Lite settlement LINE push.
+
+    Email is the primary channel.
+    LINE is supplementary if Store/Driver has bind LINE.
+
+    Supported:
+    - SETTLEMENT_EMAIL_SENT:
+      Admin asks Store/Driver to pay service fee.
+      direction = TARGET_OWES_ADMIN.
+
+    - SETTLEMENT_PAID_CONFIRMED:
+      Admin confirms settlement completed.
+      Works for both:
+      ADMIN_OWES_TARGET and TARGET_OWES_ADMIN.
+    """
     role = _safe_text(_row_get(settlement, "role", "")).upper()
     target_code = _safe_text(_row_get(settlement, "target_code", ""))
+    direction = _safe_text(_row_get(settlement, "direction", "")).upper()
 
     if role not in {"STORE", "DRIVER"} or not target_code:
         return {"ok": False, "skipped": True, "error": "invalid target"}
 
+    target = _get_settlement_target(db, settlement)
+
     try:
+        if event_type == "SETTLEMENT_EMAIL_SENT" and direction == "TARGET_OWES_ADMIN":
+            return push_settlement_payment_request_to_target(
+                db,
+                role=role,
+                target_code=target_code,
+                target=target,
+                settlement=settlement,
+                admin_payment_info=snapshot_admin_payment_info(),
+                commit=True,
+            )
+
+        if event_type == "SETTLEMENT_PAID_CONFIRMED":
+            return push_target_settlement_confirmed(
+                db,
+                role=role,
+                target_code=target_code,
+                target=target,
+                settlement=settlement,
+                commit=True,
+            )
+
         return push_to_role_target(
             db,
             role=role,
@@ -478,6 +533,7 @@ def _push_settlement_line(db, settlement, event_type):
             message=_settlement_line_message(settlement),
             commit=True,
         )
+
     except Exception as exc:
         print(f"[SETTLEMENT][LINE][ERROR] {exc}")
         return {"ok": False, "error": str(exc)}
@@ -1902,20 +1958,37 @@ def settlement_confirm_paid(settlement_code):
         role = _safe_text(settlement.get("role", "")).upper()
         settlement_type = _safe_text(settlement.get("settlement_type", "")).upper()
 
-        if target and direction == "ADMIN_OWES_TARGET":
+        # Phase 6 Lite:
+        # Send confirmation email for both settlement directions:
+        #
+        # 1. ADMIN_OWES_TARGET:
+        #    Admin has paid Store/Driver.
+        #
+        # 2. TARGET_OWES_ADMIN:
+        #    Admin has received Store/Driver platform fee.
+        #
+        # Debt is reduced only because settlement status is PAID_CONFIRMED.
+        # Never reset debt manually here.
+        if target:
             try:
-                if role == "STORE" and settlement_type == "ADMIN_PAYOUT_STORE":
-                    send_store_payout_confirmed_email(target, settlement)
-                elif role == "DRIVER" and settlement_type == "ADMIN_PAYOUT_DRIVER":
-                    send_driver_payout_confirmed_email(target, settlement)
+                send_target_settlement_confirmed_email(target, settlement)
             except Exception as exc:
-                print(f"[SETTLEMENT][CONFIRM_EMAIL][ERROR] {exc}")
+                print(
+                    "[SETTLEMENT][CONFIRM_EMAIL][ERROR] "
+                    f"role={role} direction={direction} type={settlement_type}: {exc}"
+                )
 
-        _push_settlement_line(
-            db,
-            settlement,
-            event_type="SETTLEMENT_PAID_CONFIRMED",
-        )
+        try:
+            _push_settlement_line(
+                db,
+                settlement,
+                event_type="SETTLEMENT_PAID_CONFIRMED",
+            )
+        except Exception as exc:
+            print(
+                "[SETTLEMENT][CONFIRM_LINE][ERROR] "
+                f"role={role} direction={direction} type={settlement_type}: {exc}"
+            )
 
         flash("已確認結算完成。未結算金額會依 PAID_CONFIRMED 自動扣除。", "success")
 
