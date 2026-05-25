@@ -250,14 +250,17 @@ def resend_email_verification():
 
 
 @auth_bp.get("/login")
+@auth_bp.get("/store/login")
 def login_page():
+    default_next = "/store" if request.path.startswith("/store") else "/"
+
     return render_template(
         "mobile/auth/login.html",
-        next_url=_safe_next("/"),
+        next_url=_safe_next(default_next),
     )
 
-
 @auth_bp.post("/login")
+@auth_bp.post("/store/login")
 def login_submit():
     db = get_db()
 
