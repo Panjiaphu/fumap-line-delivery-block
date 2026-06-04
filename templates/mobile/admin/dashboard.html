@@ -24,6 +24,16 @@
       <span>審核新店家與 Shiper</span>
     </a>
 
+    <a href="/admin/firewall">
+      <b>Firewall / Hacker Spam</b>
+      <span>IP、khu vực、kiểu tấn công、block thủ công</span>
+    </a>
+
+    <a href="/admin/abuse">
+      <b>Abuse Cleanup</b>
+      <span>未驗證帳號、Email suppression、spam cleanup</span>
+    </a>
+
     <a href="/admin/orders">
       <b>訂單管理</b>
       <span>付款確認、暫停、解除暫停</span>
@@ -79,6 +89,15 @@
   <a class="btn" href="/admin/approvals">開啟審核中心</a>
 </section>
 
+<section class="card" style="border-color:#fecaca;background:#fff7f7;">
+  <h2>Firewall / Hacker Spam</h2>
+  <p class="muted">
+    Theo dõi IP tấn công, phân loại CUSTOMER / STORE / SHIPER / HACKER,
+    xem khu vực, kiểu tấn công và cách phòng thủ. Có thể block/unblock IP thủ công.
+  </p>
+  <a class="btn danger" href="/admin/firewall">Mở Firewall</a>
+</section>
+
 <section class="card" style="border-color:#fde68a;background:#fffbeb;">
   <h2>Bước 9 — Đối soát tiền thật</h2>
   <p class="muted">
@@ -126,6 +145,16 @@
       店家 {{ summary.pending_stores or 0 }}｜
       Shiper {{ summary.pending_drivers or 0 }} 待審核
     </p>
+  </a>
+
+  <a class="card" href="/admin/firewall" style="text-decoration:none;">
+    <h3>Firewall / Hacker Spam</h3>
+    <p class="muted">IP、khu vực、kiểu tấn công</p>
+  </a>
+
+  <a class="card" href="/admin/abuse" style="text-decoration:none;">
+    <h3>Abuse Cleanup</h3>
+    <p class="muted">Email 未驗證 / suppression</p>
   </a>
 
   <a class="card" href="/admin/orders" style="text-decoration:none;">
