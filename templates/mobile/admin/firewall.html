@@ -68,11 +68,57 @@
         <label>Khu vực</label>
         <input name="area" value="{{ filters.area }}" placeholder="TW / Taipei / city">
       </div>
+
+      <div class="form-group">
+        <label>Số dòng</label>
+        <select name="per_page">
+          {% for size in [25, 50, 100, 200] %}
+            <option value="{{ size }}" {% if filters.per_page == size %}selected{% endif %}>{{ size }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
 
     <button class="btn" type="submit">Lọc dữ liệu</button>
     <a class="btn secondary" href="/admin/firewall">Xóa lọc</a>
   </form>
+</section>
+
+<section class="card">
+  <h2>Export CSV</h2>
+  <p class="muted">Tải dữ liệu để phân tích IP, khu vực, kiểu tấn công và hiệu quả chống spam.</p>
+  <a class="btn secondary" href="{{ pagination.export_url }}">Export sự kiện</a>
+  <a class="btn secondary" href="/admin/firewall/export/ips">Export IP</a>
+  <a class="btn secondary" href="/admin/firewall/export/areas">Export khu vực</a>
+  <a class="btn secondary" href="/admin/firewall/export/attacks">Export kiểu tấn công</a>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h2>Chart theo ngày</h2>
+    {% for row in day_chart %}
+      <p>
+        <b>{{ row.bucket or 'UNKNOWN' }}</b>
+        <span class="badge">{{ row.event_count }} events</span>
+        {% if row.high_count %}<span class="badge danger">{{ row.high_count }} high</span>{% endif %}
+      </p>
+    {% else %}
+      <p class="muted">Chưa có dữ liệu theo ngày.</p>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>Chart theo giờ</h2>
+    {% for row in hour_chart %}
+      <p>
+        <b>{{ row.bucket or '??' }}:00</b>
+        <span class="badge">{{ row.event_count }} events</span>
+        {% if row.high_count %}<span class="badge danger">{{ row.high_count }} high</span>{% endif %}
+      </p>
+    {% else %}
+      <p class="muted">Chưa có dữ liệu theo giờ.</p>
+    {% endfor %}
+  </div>
 </section>
 
 <section class="card" style="border-color:#fecaca;background:#fff7f7;">
@@ -91,10 +137,51 @@
 </section>
 
 <section class="card">
+  <h2>Cloudflare WAF / Network Firewall</h2>
+  <p class="muted">
+    Đây là checklist rule nên cấu hình ở Cloudflare để chặn trước khi request vào Render.
+    App hiện đã có firewall trong Flask, nhưng WAF ở edge vẫn là lớp chặn mạnh hơn.
+  </p>
+  <div style="border-bottom:1px solid #e5e7eb;padding:10px 0;">
+    <b>Scanner/probe path</b><br>
+    <span class="muted">Chặn hoặc challenge path chứa .env, .git, wp-admin, wp-login, phpmyadmin, adminer, cgi-bin, backup/source archive.</span>
+  </div>
+  <div style="border-bottom:1px solid #e5e7eb;padding:10px 0;">
+    <b>SQLi/XSS/traversal</b><br>
+    <span class="muted">Dùng Cloudflare Managed Rules và custom rule cho query chứa ../, union select, script tag, shell metacharacter.</span>
+  </div>
+  <div style="border-bottom:1px solid #e5e7eb;padding:10px 0;">
+    <b>Auth spam</b><br>
+    <span class="muted">Rate limit/challenge POST tới /register, /login, /account/email/resend theo IP và country.</span>
+  </div>
+  <div style="padding:10px 0;">
+    <b>Khu vực rủi ro</b><br>
+    <span class="muted">Nếu admin thấy khu vực/IP lạ tấn công liên tục, thêm country/IP ASN rule trên Cloudflare trước khi auto-block trong app.</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Bulk IP action</h2>
+  <form id="bulkFirewallForm" method="post" action="/admin/firewall/bulk">
+    <div class="form-group">
+      <label>Hành động</label>
+      <select name="action">
+        <option value="block">Block IP đã chọn</option>
+        <option value="release">Unblock IP đã chọn</option>
+      </select>
+    </div>
+    <button class="btn danger" type="submit">Chạy bulk action</button>
+  </form>
+</section>
+
+<section class="card">
   <h2>IP đáng chú ý</h2>
   {% for row in ip_rollup %}
     <div style="border-bottom:1px solid #e5e7eb;padding:12px 0;">
-      <b>{{ row.ip_address }}</b>
+      <label style="display:flex;gap:8px;align-items:center;">
+        <input form="bulkFirewallForm" type="checkbox" name="ip_addresses" value="{{ row.ip_address }}">
+        <b>{{ row.ip_address }}</b>
+      </label>
       {% if row.is_blocked %}
         <span class="badge danger">BLOCKED</span>
       {% endif %}
@@ -192,6 +279,7 @@
 
 <section class="card">
   <h2>Sự kiện gần đây</h2>
+  <p class="muted">{{ pagination.total }} sự kiện phù hợp bộ lọc. Trang {{ pagination.page }} / {{ pagination.total_pages }}.</p>
   {% for row in recent_events %}
     <div style="border-bottom:1px solid #e5e7eb;padding:10px 0;">
       <b>{{ row.created_at or '-' }}｜{{ row.ip_address }}｜{{ row.attack_type }}</b>
@@ -208,5 +296,12 @@
   {% else %}
     <p class="muted">Chưa có sự kiện phù hợp bộ lọc.</p>
   {% endfor %}
+
+  {% if pagination.prev_url or pagination.next_url %}
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      {% if pagination.prev_url %}<a class="btn secondary" href="{{ pagination.prev_url }}">Trang trước</a>{% endif %}
+      {% if pagination.next_url %}<a class="btn secondary" href="{{ pagination.next_url }}">Trang sau</a>{% endif %}
+    </div>
+  {% endif %}
 </section>
 {% endblock %}
