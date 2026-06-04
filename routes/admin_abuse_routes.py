@@ -55,6 +55,39 @@ def _user_order_count(db, user_id):
     return int(row["c"] or 0) if row else 0
 
 
+def _block_existing_user(db, user, reason):
+    admin_user_id, admin_login_id = _admin_actor()
+    user_id = int(user["id"])
+
+    db.execute(
+        """
+        UPDATE users
+        SET status = 'SUSPENDED',
+            updated_at = datetime('now', '+8 hours')
+        WHERE id = ?
+        """,
+        (user_id,),
+    )
+
+    create_block(
+        db,
+        event_type="ADMIN_USER_BLOCKED",
+        actor_role="ADMIN_OPERATOR",
+        actor_id=admin_user_id,
+        actor_code=admin_login_id,
+        amount_twd=0,
+        payload={
+            "user_id": user_id,
+            "login_id": user["login_id"],
+            "role": user["role"],
+            "email": user["email"] or "",
+            "register_ip": user["register_ip"] if "register_ip" in user.keys() else "",
+            "reason": reason,
+        },
+        commit=False,
+    )
+
+
 def _unverified_users(db):
     return db.execute(
         """
@@ -192,36 +225,8 @@ def block_user(user_id):
         flash("不能在此停用 Admin 帳號。", "danger")
         return redirect("/admin/abuse")
 
-    admin_user_id, admin_login_id = _admin_actor()
-
     try:
-        db.execute(
-            """
-            UPDATE users
-            SET status = 'SUSPENDED',
-                updated_at = datetime('now', '+8 hours')
-            WHERE id = ?
-            """,
-            (user_id,),
-        )
-
-        create_block(
-            db,
-            event_type="ADMIN_USER_BLOCKED",
-            actor_role="ADMIN_OPERATOR",
-            actor_id=admin_user_id,
-            actor_code=admin_login_id,
-            amount_twd=0,
-            payload={
-                "user_id": user_id,
-                "login_id": user["login_id"],
-                "role": user["role"],
-                "email": user["email"] or "",
-                "register_ip": user["register_ip"] if "register_ip" in user.keys() else "",
-                "reason": reason,
-            },
-            commit=False,
-        )
+        _block_existing_user(db, user, reason)
         db.commit()
         flash("已停用此使用者。", "success")
     except Exception as exc:
@@ -248,8 +253,15 @@ def delete_user(user_id):
     order_count = _user_order_count(db, user_id)
 
     if order_count > 0:
-        flash("此使用者已有訂單紀錄，已改用停用處理以保留交易紀錄。", "warning")
-        return redirect(f"/admin/abuse/users/{user_id}/block")
+        try:
+            _block_existing_user(db, user, "Delete requested but user has orders; suspended instead")
+            db.commit()
+            flash("此使用者已有訂單紀錄，已改為停用以保留交易紀錄。", "warning")
+        except Exception as exc:
+            db.rollback()
+            flash(f"停用失敗：{exc}", "danger")
+
+        return redirect("/admin/abuse")
 
     admin_user_id, admin_login_id = _admin_actor()
 
