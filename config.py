@@ -31,6 +31,20 @@ def get_float_env(key, default):
         return float(default)
 
 
+def get_rate_limit_storage_uri():
+    explicit = os.getenv("RATELIMIT_STORAGE_URI", "").strip()
+
+    if explicit:
+        return explicit
+
+    redis_url = os.getenv("REDIS_URL", "").strip()
+
+    if redis_url:
+        return redis_url
+
+    return "memory://"
+
+
 class Config:
     APP_NAME = os.getenv("APP_NAME", "FUMAP GO")
     APP_ENV = os.getenv("FLASK_ENV", os.getenv("APP_MODE", "production"))
@@ -67,6 +81,7 @@ class Config:
     REGISTER_RATE_LIMIT = os.getenv("REGISTER_RATE_LIMIT", "3 per hour").strip()
     LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "10 per 10 minutes").strip()
     VERIFY_RESEND_RATE_LIMIT = os.getenv("VERIFY_RESEND_RATE_LIMIT", "1 per 10 minutes").strip()
+    RATELIMIT_STORAGE_URI = get_rate_limit_storage_uri()
     VERIFY_EMAIL_COOLDOWN_SECONDS = get_int_env("VERIFY_EMAIL_COOLDOWN_SECONDS", 600)
     EMAIL_FAILED_SUPPRESSION_COUNT = get_int_env("EMAIL_FAILED_SUPPRESSION_COUNT", 2)
     BLOCKED_EMAIL_DOMAINS = os.getenv("BLOCKED_EMAIL_DOMAINS", "").strip()
@@ -91,6 +106,17 @@ class Config:
     FIREWALL_AUTO_BLOCK_ENABLED = get_bool_env("FIREWALL_AUTO_BLOCK_ENABLED", False)
     FIREWALL_AUTO_BLOCK_THRESHOLD = get_int_env("FIREWALL_AUTO_BLOCK_THRESHOLD", 12)
     FIREWALL_AUTO_BLOCK_WINDOW_MINUTES = get_int_env("FIREWALL_AUTO_BLOCK_WINDOW_MINUTES", 30)
+
+    # Gmail / mailbox bounce automation. Use a Gmail App Password, not the normal Gmail password.
+    BOUNCE_IMAP_ENABLED = get_bool_env("BOUNCE_IMAP_ENABLED", False)
+    BOUNCE_IMAP_HOST = os.getenv("BOUNCE_IMAP_HOST", "imap.gmail.com").strip()
+    BOUNCE_IMAP_PORT = get_int_env("BOUNCE_IMAP_PORT", 993)
+    BOUNCE_IMAP_USERNAME = os.getenv("BOUNCE_IMAP_USERNAME", os.getenv("SMTP_USERNAME", "")).strip()
+    BOUNCE_IMAP_PASSWORD = os.getenv("BOUNCE_IMAP_PASSWORD", "").strip()
+    BOUNCE_IMAP_MAILBOX = os.getenv("BOUNCE_IMAP_MAILBOX", "INBOX").strip()
+    BOUNCE_IMAP_SEARCH = os.getenv("BOUNCE_IMAP_SEARCH", "UNSEEN").strip()
+    BOUNCE_IMAP_MAX_MESSAGES = get_int_env("BOUNCE_IMAP_MAX_MESSAGES", 25)
+    BOUNCE_AUTO_SUPPRESS_ENABLED = get_bool_env("BOUNCE_AUTO_SUPPRESS_ENABLED", True)
 
     # Email / SMTP config.
     # V1 can use Gmail App Password for testing.
