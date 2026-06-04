@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import datetime
 from urllib.parse import quote
@@ -34,10 +35,18 @@ def _limiter_key():
     return get_client_ip() or get_remote_address() or "unknown"
 
 
+def _limiter_storage_uri():
+    return (
+        os.getenv("RATELIMIT_STORAGE_URI", "").strip()
+        or os.getenv("REDIS_URL", "").strip()
+        or "memory://"
+    )
+
+
 limiter = Limiter(
     key_func=_limiter_key,
     default_limits=[],
-    storage_uri="memory://",
+    storage_uri=_limiter_storage_uri(),
 ) if Limiter else None
 
 
