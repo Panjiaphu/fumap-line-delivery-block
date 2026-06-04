@@ -90,6 +90,15 @@ def init_abuse_guards(app):
                 flash("註冊失敗，請稍後再試。", "danger")
                 return redirect(f"/register?role={role}")
 
+            if not invite_code_valid(request.form.get("invite_code", "")):
+                flash("註冊碼不正確或已停用，請聯絡 FUMAP GO 團隊。", "danger")
+                return redirect(f"/register?role={role}")
+
+            ok, _message = verify_turnstile_for_action("register")
+            if not ok:
+                flash("請完成安全驗證後再註冊。", "danger")
+                return redirect(f"/register?role={role}")
+
             if email and is_disposable_email(email):
                 flash("此 Email 網域目前不支援註冊，請使用常用 Email。", "danger")
                 return redirect(f"/register?role={role}")
@@ -117,7 +126,18 @@ def init_abuse_guards(app):
                     flash("確認信寄送太頻繁，請稍後再試。", "warning")
                     return redirect(f"/register?role={role}")
 
+        if request.endpoint == "auth.login_submit":
+            ok, _message = verify_turnstile_for_action("login")
+            if not ok:
+                flash("請完成安全驗證後再登入。", "danger")
+                return redirect("/login")
+
         if request.endpoint == "auth.resend_email_verification":
+            ok, _message = verify_turnstile_for_action("resend")
+            if not ok:
+                flash("請完成安全驗證後再重新寄送確認信。", "danger")
+                return redirect(request.referrer or "/account/email/resend")
+
             try:
                 from db import get_db
                 from services.permission_service import current_user
@@ -162,6 +182,11 @@ def init_abuse_guards(app):
         if request.endpoint != "customer.checkout":
             return None
 
+        ok, _message = verify_turnstile_for_action("checkout")
+        if not ok:
+            flash("請完成安全驗證後再建立訂單。", "danger")
+            return redirect(request.path)
+
         if not current_app.config.get("REQUIRE_VERIFIED_EMAIL_FOR_CUSTOMER_ORDER", True):
             return None
 
@@ -201,7 +226,7 @@ def ensure_abuse_schema(app):
     if not db_path:
         return
 
-    columns = {
+    user_columns = {
         "register_ip": "register_ip TEXT",
         "user_agent": "user_agent TEXT",
         "risk_score": "risk_score INTEGER DEFAULT 0",
@@ -217,9 +242,29 @@ def ensure_abuse_schema(app):
             for row in conn.execute("PRAGMA table_info(users)").fetchall()
         }
 
-        for name, column_sql in columns.items():
+        for name, column_sql in user_columns.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {column_sql}")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_suppressions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                reason TEXT,
+                source TEXT,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_email_suppressions_email_status ON email_suppressions(email, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_email_suppressions_created_at ON email_suppressions(created_at)"
+        )
 
         conn.commit()
     finally:
@@ -246,6 +291,32 @@ def honeypot_triggered(form):
             return True
 
     return False
+
+
+def invite_code_valid(raw_code):
+    if not current_app.config.get("REGISTER_REQUIRE_INVITE_CODE", False):
+        return True
+
+    configured = current_app.config.get("REGISTER_INVITE_CODES", "")
+    allowed = {
+        item.strip()
+        for item in str(configured or "").split(",")
+        if item.strip()
+    }
+
+    if not allowed:
+        return False
+
+    return (raw_code or "").strip() in allowed
+
+
+def verify_turnstile_for_action(action):
+    try:
+        from services.turnstile_service import verify_turnstile_request
+
+        return verify_turnstile_request(action, remote_ip=get_client_ip())
+    except Exception as exc:
+        return False, str(exc)
 
 
 def blocked_email_domains():
@@ -319,6 +390,128 @@ def verification_email_on_cooldown(db, email, cooldown_seconds):
     return True, int(cooldown_seconds) - elapsed
 
 
+def email_is_suppressed(db, email):
+    email = (email or "").strip().lower()
+
+    if not email:
+        return False, ""
+
+    try:
+        row = db.execute(
+            """
+            SELECT reason
+            FROM email_suppressions
+            WHERE lower(COALESCE(email, '')) = ?
+              AND status = 'ACTIVE'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (email,),
+        ).fetchone()
+    except Exception:
+        return False, ""
+
+    if not row:
+        return False, ""
+
+    return True, row["reason"] or "Email is suppressed"
+
+
+def add_email_suppression(db, email, *, reason="", source="manual", commit=True):
+    email = (email or "").strip().lower()
+
+    if not email:
+        return None
+
+    existing, _reason = email_is_suppressed(db, email)
+
+    if existing:
+        return None
+
+    db.execute(
+        """
+        INSERT INTO email_suppressions (
+            email,
+            reason,
+            source,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, 'ACTIVE', datetime('now', '+8 hours'), datetime('now', '+8 hours'))
+        """,
+        (email, reason or "Suppressed", source or "manual"),
+    )
+
+    if commit:
+        db.commit()
+
+    return email
+
+
+def release_email_suppression(db, email, *, commit=True):
+    email = (email or "").strip().lower()
+
+    if not email:
+        return 0
+
+    cur = db.execute(
+        """
+        UPDATE email_suppressions
+        SET status = 'RELEASED',
+            updated_at = datetime('now', '+8 hours')
+        WHERE lower(COALESCE(email, '')) = ?
+          AND status = 'ACTIVE'
+        """,
+        (email,),
+    )
+
+    if commit:
+        db.commit()
+
+    return int(cur.rowcount or 0)
+
+
+def maybe_auto_suppress_failed_email(db, email, *, source="email_failure", commit=True):
+    email = (email or "").strip().lower()
+
+    if not email:
+        return False
+
+    failed_limit = int(current_app.config.get("EMAIL_FAILED_SUPPRESSION_COUNT", 2))
+
+    if failed_limit <= 0:
+        return False
+
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS failed_count
+        FROM email_logs
+        WHERE lower(COALESCE(recipient_email, '')) = ?
+          AND status = 'FAILED'
+        """,
+        (email,),
+    ).fetchone()
+
+    failed_count = int(row["failed_count"] or 0) if row else 0
+
+    if failed_count < failed_limit:
+        return False
+
+    add_email_suppression(
+        db,
+        email,
+        reason=f"Auto-suppressed after {failed_count} failed sends",
+        source=source,
+        commit=False,
+    )
+
+    if commit:
+        db.commit()
+
+    return True
+
+
 def should_suppress_verification_email(db, email):
     email = (email or "").strip().lower()
 
@@ -327,6 +520,11 @@ def should_suppress_verification_email(db, email):
 
     if is_disposable_email(email):
         return True, "Disposable email domain"
+
+    suppressed, reason = email_is_suppressed(db, email)
+
+    if suppressed:
+        return True, reason
 
     failed_limit = int(current_app.config.get("EMAIL_FAILED_SUPPRESSION_COUNT", 2))
 
@@ -343,6 +541,13 @@ def should_suppress_verification_email(db, email):
     failed_count = int(row["failed_count"] or 0) if row else 0
 
     if failed_count >= failed_limit:
+        add_email_suppression(
+            db,
+            email,
+            reason=f"Auto-suppressed after {failed_count} failed sends",
+            source="failed_email_count",
+            commit=True,
+        )
         return True, "Recipient has repeated failed email sends"
 
     return False, ""
