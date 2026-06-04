@@ -1,6 +1,5 @@
 import re
 import sqlite3
-from datetime import datetime, timedelta
 
 from flask import current_app, request, session
 
@@ -348,16 +347,17 @@ def should_auto_block_ip(db, ip_address):
     if not ip_address or ip_is_blocked(db, ip_address):
         return False
 
-    since = (datetime.now() - timedelta(minutes=firewall_window_minutes())).isoformat(timespec="seconds")
+    window_minutes = max(1, firewall_window_minutes())
+    window_modifier = f"-{window_minutes} minutes"
     row = db.execute(
         """
         SELECT COUNT(*) AS c
         FROM firewall_events
         WHERE ip_address = ?
           AND severity IN ('MEDIUM', 'HIGH')
-          AND created_at >= ?
+          AND created_at >= datetime('now', '+8 hours', ?)
         """,
-        (ip_address, since),
+        (ip_address, window_modifier),
     ).fetchone()
 
     count = int(row["c"] or 0) if row else 0
