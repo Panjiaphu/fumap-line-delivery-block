@@ -112,6 +112,7 @@ def register_routes(app):
         ("routes.driver_routes", "driver_bp"),
         ("routes.admin_routes", "admin_bp"),
         ("routes.admin_abuse_routes", "admin_abuse_bp"),
+        ("routes.security_routes", "security_bp"),
         ("routes.line_routes", "line_bp"),
         ("routes.block_routes", "block_bp"),
         ("routes.proof_routes", "proof_bp"),
