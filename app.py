@@ -6,6 +6,7 @@ from flask import Flask, session, request, send_from_directory, jsonify, abort
 from config import Config
 from db import close_db, init_db, get_db
 from services.abuse_guard import apply_abuse_route_limits, ensure_abuse_schema, init_abuse_guards
+from services.bounce_service import ensure_bounce_schema
 from services.firewall_service import ensure_firewall_schema, init_firewall
 
 
@@ -28,6 +29,7 @@ def create_app():
         init_db(app)
         ensure_abuse_schema(app)
         ensure_firewall_schema(app)
+        ensure_bounce_schema(app)
 
     register_context(app)
     register_routes(app)
