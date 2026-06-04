@@ -17,6 +17,10 @@ def turnstile_secret_key():
     return (current_app.config.get("TURNSTILE_SECRET_KEY") or "").strip()
 
 
+def turnstile_configured():
+    return bool(turnstile_site_key() and turnstile_secret_key())
+
+
 def turnstile_enabled_for(action):
     action = (action or "").strip().lower()
 
@@ -32,17 +36,17 @@ def turnstile_enabled_for(action):
     if not _bool_config(flag_name, False):
         return False
 
-    return bool(turnstile_secret_key())
+    return turnstile_configured()
 
 
 def turnstile_widget_enabled_for(action):
-    return bool(turnstile_site_key()) and turnstile_enabled_for(action)
+    return turnstile_enabled_for(action)
 
 
 def verify_turnstile_response(token, *, remote_ip="", expected_action=""):
     secret = turnstile_secret_key()
 
-    if not secret:
+    if not turnstile_configured():
         return True, ""
 
     token = (token or "").strip()
