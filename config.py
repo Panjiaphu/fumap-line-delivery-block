@@ -87,6 +87,11 @@ class Config:
     REGISTER_REQUIRE_INVITE_CODE = get_bool_env("REGISTER_REQUIRE_INVITE_CODE", False)
     REGISTER_INVITE_CODES = os.getenv("REGISTER_INVITE_CODES", "").strip()
 
+    FIREWALL_MONITOR_ENABLED = get_bool_env("FIREWALL_MONITOR_ENABLED", True)
+    FIREWALL_AUTO_BLOCK_ENABLED = get_bool_env("FIREWALL_AUTO_BLOCK_ENABLED", False)
+    FIREWALL_AUTO_BLOCK_THRESHOLD = get_int_env("FIREWALL_AUTO_BLOCK_THRESHOLD", 12)
+    FIREWALL_AUTO_BLOCK_WINDOW_MINUTES = get_int_env("FIREWALL_AUTO_BLOCK_WINDOW_MINUTES", 30)
+
     # Email / SMTP config.
     # V1 can use Gmail App Password for testing.
     # Production should later move to a transactional provider such as
