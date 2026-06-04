@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime
+from urllib.parse import quote
 
 from flask import current_app, flash, redirect, request, session
 
@@ -26,6 +27,7 @@ DISPOSABLE_EMAIL_DOMAINS = {
 }
 
 EMAIL_VERIFICATION_EVENT = "EMAIL_VERIFICATION_REQUESTED"
+TURNSTILE_SESSION_TTL_SECONDS = 900
 
 
 def _limiter_key():
@@ -182,10 +184,9 @@ def init_abuse_guards(app):
         if request.endpoint != "customer.checkout":
             return None
 
-        ok, _message = verify_turnstile_for_action("checkout")
-        if not ok:
-            flash("請完成安全驗證後再建立訂單。", "danger")
-            return redirect(request.path)
+        checkout_guard = require_turnstile_session_or_redirect("checkout")
+        if checkout_guard:
+            return checkout_guard
 
         if not current_app.config.get("REQUIRE_VERIFIED_EMAIL_FOR_CUSTOMER_ORDER", True):
             return None
@@ -317,6 +318,43 @@ def verify_turnstile_for_action(action):
         return verify_turnstile_request(action, remote_ip=get_client_ip())
     except Exception as exc:
         return False, str(exc)
+
+
+def turnstile_session_is_valid(action):
+    try:
+        value = session.get(f"turnstile_{action}_verified_at", "")
+        verified_at = _parse_db_time(value)
+
+        if not verified_at:
+            return False
+
+        elapsed = (datetime.now() - verified_at).total_seconds()
+        return 0 <= elapsed <= TURNSTILE_SESSION_TTL_SECONDS
+    except Exception:
+        return False
+
+
+def require_turnstile_session_or_redirect(action):
+    try:
+        from services.turnstile_service import turnstile_enabled_for
+
+        if not turnstile_enabled_for(action):
+            return None
+    except Exception:
+        return None
+
+    ok, _message = verify_turnstile_for_action(action)
+
+    if ok:
+        session[f"turnstile_{action}_verified_at"] = datetime.now().isoformat(timespec="seconds")
+        return None
+
+    if turnstile_session_is_valid(action):
+        return None
+
+    flash("請先完成安全驗證，再重新送出訂單。", "warning")
+    next_url = quote(request.path or "/show", safe="/")
+    return redirect(f"/security/turnstile/{action}?next={next_url}")
 
 
 def blocked_email_domains():
