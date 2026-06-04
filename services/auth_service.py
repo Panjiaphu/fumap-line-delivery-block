@@ -226,7 +226,19 @@ def get_role_target(db, user):
     return None
 
 
-def register_user(db, *, login_id, password, display_name, phone, role, email=""):
+def register_user(
+    db,
+    *,
+    login_id,
+    password,
+    display_name,
+    phone,
+    role,
+    email="",
+    register_ip="",
+    user_agent="",
+    risk_score=0,
+):
     data = validate_registration_payload(
         login_id=login_id,
         password=password,
@@ -260,10 +272,14 @@ def register_user(db, *, login_id, password, display_name, phone, role, email=""
             phone,
             email,
             status,
+            register_ip,
+            user_agent,
+            risk_score,
+            verify_send_count,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, 0, ?, ?)
         """,
         (
             data["login_id"],
@@ -272,6 +288,9 @@ def register_user(db, *, login_id, password, display_name, phone, role, email=""
             data["display_name"],
             data["phone"],
             data["email"],
+            (register_ip or "")[:120],
+            (user_agent or "")[:500],
+            int(risk_score or 0),
             now,
             now,
         ),
@@ -522,12 +541,15 @@ def create_email_verification_token(db, user_id):
         SET email_verification_token = ?,
             email_verification_expires_at = ?,
             email_verification_sent_at = ?,
+            last_verify_sent_at = ?,
+            verify_send_count = COALESCE(verify_send_count, 0) + 1,
             updated_at = ?
         WHERE id = ?
         """,
         (
             token_hash,
             expires_at,
+            now,
             now,
             now,
             user["id"],
