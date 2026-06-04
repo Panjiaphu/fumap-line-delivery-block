@@ -1,0 +1,27 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}安全驗證｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}建立訂單前的安全檢查{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>安全驗證</h2>
+  <p class="muted">
+    為了降低自動化下單與垃圾流量，請先完成安全驗證。
+    驗證完成後會回到原頁面，請重新送出訂單。
+  </p>
+
+  <form method="post" action="/security/turnstile/{{ action }}">
+    <input type="hidden" name="next" value="{{ next_url }}">
+
+    {% set turnstile_action = action %}
+    {% include "mobile/_turnstile.html" %}
+
+    <button class="btn" type="submit">完成驗證</button>
+  </form>
+</section>
+
+<section class="card">
+  <a class="btn secondary" href="{{ next_url }}">返回上一頁</a>
+</section>
+{% endblock %}
