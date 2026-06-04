@@ -1,0 +1,10 @@
+{% if turnstile_enabled_for is defined and turnstile_enabled_for(turnstile_action) and turnstile_site_key %}
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <div class="form-group">
+    <div
+      class="cf-turnstile"
+      data-sitekey="{{ turnstile_site_key }}"
+      data-action="{{ turnstile_action }}"
+    ></div>
+  </div>
+{% endif %}
