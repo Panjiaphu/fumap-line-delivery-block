@@ -145,49 +145,48 @@
     Showing page {{ pagination.page }} / {{ pagination.total_pages }}｜Total {{ pagination.total }}
   </p>
 
-  <form method="post" action="/admin/abuse/bulk">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <button class="btn danger" name="action" value="block" type="submit">Bulk block</button>
-      <button class="btn secondary" name="action" value="suppress" type="submit">Bulk suppress email</button>
-      <button class="btn secondary" name="action" value="delete" type="submit">Bulk delete/suspend</button>
-    </div>
+  <form id="bulkUserForm" method="post" action="/admin/abuse/bulk"></form>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <button class="btn danger" form="bulkUserForm" name="action" value="block" type="submit">Bulk block</button>
+    <button class="btn secondary" form="bulkUserForm" name="action" value="suppress" type="submit">Bulk suppress email</button>
+    <button class="btn secondary" form="bulkUserForm" name="action" value="delete" type="submit">Bulk delete/suspend</button>
+  </div>
 
-    {% for u in unverified_users %}
-      <div style="border-bottom:1px solid #e5e7eb;padding:12px 0;">
-        <label class="check-row">
-          <input type="checkbox" name="user_ids" value="{{ u.id }}">
-          <span><b>#{{ u.id }}｜{{ u.login_id }}｜{{ u.role }}</b></span>
-        </label>
-        <span class="muted">
-          {{ u.email or '-' }}｜{{ u.display_name or '-' }}｜{{ u.phone or '-' }}<br>
-          IP: {{ u.register_ip or '-' }}<br>
-          UA: {{ u.user_agent or '-' }}<br>
-          created: {{ u.created_at or '-' }}｜verify sends: {{ u.verify_send_count or 0 }}｜failed emails: {{ u.failed_email_count or 0 }}｜orders: {{ u.order_count or 0 }}
-        </span>
+  {% for u in unverified_users %}
+    <div style="border-bottom:1px solid #e5e7eb;padding:12px 0;">
+      <label class="check-row">
+        <input form="bulkUserForm" type="checkbox" name="user_ids" value="{{ u.id }}">
+        <span><b>#{{ u.id }}｜{{ u.login_id }}｜{{ u.role }}</b></span>
+      </label>
+      <span class="muted">
+        {{ u.email or '-' }}｜{{ u.display_name or '-' }}｜{{ u.phone or '-' }}<br>
+        IP: {{ u.register_ip or '-' }}<br>
+        UA: {{ u.user_agent or '-' }}<br>
+        created: {{ u.created_at or '-' }}｜verify sends: {{ u.verify_send_count or 0 }}｜failed emails: {{ u.failed_email_count or 0 }}｜orders: {{ u.order_count or 0 }}
+      </span>
 
-        <form method="post" action="/admin/abuse/users/{{ u.id }}/block" style="margin-top:8px;">
-          <input type="hidden" name="reason" value="Unverified suspected spam account">
-          <button class="btn danger" type="submit">停用 spam 帳號</button>
+      <form method="post" action="/admin/abuse/users/{{ u.id }}/block" style="margin-top:8px;">
+        <input type="hidden" name="reason" value="Unverified suspected spam account">
+        <button class="btn danger" type="submit">停用 spam 帳號</button>
+      </form>
+
+      {% if (u.order_count or 0) == 0 %}
+        <form method="post" action="/admin/abuse/users/{{ u.id }}/delete" style="margin-top:8px;">
+          <button class="btn secondary" type="submit">刪除無訂單 spam 帳號</button>
         </form>
+      {% endif %}
 
-        {% if (u.order_count or 0) == 0 %}
-          <form method="post" action="/admin/abuse/users/{{ u.id }}/delete" style="margin-top:8px;">
-            <button class="btn secondary" type="submit">刪除無訂單 spam 帳號</button>
-          </form>
-        {% endif %}
-
-        {% if u.email %}
-          <form method="post" action="/admin/abuse/suppressions" style="margin-top:8px;">
-            <input type="hidden" name="email" value="{{ u.email }}">
-            <input type="hidden" name="reason" value="Admin suppressed from unverified spam cleanup">
-            <button class="btn secondary" type="submit">加入 Email suppression</button>
-          </form>
-        {% endif %}
-      </div>
-    {% else %}
-      <p class="muted">目前沒有符合條件的 Email 未驗證帳號。</p>
-    {% endfor %}
-  </form>
+      {% if u.email %}
+        <form method="post" action="/admin/abuse/suppressions" style="margin-top:8px;">
+          <input type="hidden" name="email" value="{{ u.email }}">
+          <input type="hidden" name="reason" value="Admin suppressed from unverified spam cleanup">
+          <button class="btn secondary" type="submit">加入 Email suppression</button>
+        </form>
+      {% endif %}
+    </div>
+  {% else %}
+    <p class="muted">目前沒有符合條件的 Email 未驗證帳號。</p>
+  {% endfor %}
 
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
     {% if pagination.prev_url %}<a class="btn secondary" href="{{ pagination.prev_url }}">Prev</a>{% endif %}
