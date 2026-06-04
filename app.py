@@ -6,6 +6,7 @@ from flask import Flask, session, request, send_from_directory, jsonify, abort
 from config import Config
 from db import close_db, init_db, get_db
 from services.abuse_guard import apply_abuse_route_limits, ensure_abuse_schema, init_abuse_guards
+from services.firewall_service import ensure_firewall_schema, init_firewall
 
 
 def create_app():
@@ -17,6 +18,7 @@ def create_app():
     )
 
     init_abuse_guards(app)
+    init_firewall(app)
     app.teardown_appcontext(close_db)
 
     register_upload_routes(app)
@@ -25,6 +27,7 @@ def create_app():
     with app.app_context():
         init_db(app)
         ensure_abuse_schema(app)
+        ensure_firewall_schema(app)
 
     register_context(app)
     register_routes(app)
@@ -112,6 +115,7 @@ def register_routes(app):
         ("routes.driver_routes", "driver_bp"),
         ("routes.admin_routes", "admin_bp"),
         ("routes.admin_abuse_routes", "admin_abuse_bp"),
+        ("routes.admin_firewall_routes", "admin_firewall_bp"),
         ("routes.security_routes", "security_bp"),
         ("routes.line_routes", "line_bp"),
         ("routes.block_routes", "block_bp"),
