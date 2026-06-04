@@ -41,6 +41,9 @@
       若使用自己的手機，可勾選記住登入狀態。公共設備請勿勾選。
     </p>
 
+    {% set turnstile_action = 'login' %}
+    {% include "mobile/_turnstile.html" %}
+
     <button class="btn" type="submit">登入</button>
   </form>
 
