@@ -111,6 +111,7 @@ def register_routes(app):
         ("routes.store_routes", "store_bp"),
         ("routes.driver_routes", "driver_bp"),
         ("routes.admin_routes", "admin_bp"),
+        ("routes.admin_abuse_routes", "admin_abuse_bp"),
         ("routes.line_routes", "line_bp"),
         ("routes.block_routes", "block_bp"),
         ("routes.proof_routes", "proof_bp"),
@@ -137,6 +138,12 @@ def register_context(app):
         user_id = session.get("user_id")
         display_name = session.get("display_name", "")
 
+        try:
+            from services.turnstile_service import turnstile_widget_enabled_for
+        except Exception:
+            def turnstile_widget_enabled_for(action):
+                return False
+
         return {
             "APP_NAME": app.config.get("APP_NAME", "FUMAP GO"),
             "current_role": role,
@@ -145,6 +152,9 @@ def register_context(app):
             "is_logged_in": bool(user_id),
             "is_admin": role == "ADMIN_OPERATOR",
             "request_path": request.path,
+            "turnstile_site_key": app.config.get("TURNSTILE_SITE_KEY", ""),
+            "turnstile_enabled_for": turnstile_widget_enabled_for,
+            "register_invite_required": app.config.get("REGISTER_REQUIRE_INVITE_CODE", False),
         }
 
     @app.template_filter("twd")
