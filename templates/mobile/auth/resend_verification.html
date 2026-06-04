@@ -1,0 +1,34 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}重新寄送確認信｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}Email 驗證保護帳號與下單流程{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>重新寄送 Email 確認信</h2>
+
+  {% if user.email_verified_at %}
+    <p class="muted">此帳號 Email 已完成驗證，不需要重新寄送確認信。</p>
+    <a class="btn secondary" href="/">回首頁</a>
+  {% elif not user.email %}
+    <p class="muted">此帳號尚未設定 Email，請聯絡 FUMAP GO 團隊協助更新。</p>
+    <a class="btn secondary" href="/">回首頁</a>
+  {% else %}
+    <p class="muted">
+      系統會寄送確認連結到：<b>{{ user.email }}</b><br>
+      為避免信箱被濫用，重新寄送有冷卻時間與安全驗證。
+    </p>
+
+    <form method="post" action="/account/email/resend">
+      {% set turnstile_action = 'resend' %}
+      {% include "mobile/_turnstile.html" %}
+
+      <button class="btn" type="submit">寄出確認信</button>
+    </form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <a class="btn secondary" href="/account/password">修改密碼</a>
+</section>
+{% endblock %}
