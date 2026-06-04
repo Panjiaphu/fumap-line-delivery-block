@@ -62,6 +62,20 @@ class Config:
         30,
     )
 
+    # Anti-abuse controls for the public pilot.
+    REGISTER_ENABLED = get_bool_env("REGISTER_ENABLED", True)
+    REGISTER_RATE_LIMIT = os.getenv("REGISTER_RATE_LIMIT", "3 per hour").strip()
+    LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "10 per 10 minutes").strip()
+    VERIFY_RESEND_RATE_LIMIT = os.getenv("VERIFY_RESEND_RATE_LIMIT", "1 per 10 minutes").strip()
+    VERIFY_EMAIL_COOLDOWN_SECONDS = get_int_env("VERIFY_EMAIL_COOLDOWN_SECONDS", 600)
+    EMAIL_FAILED_SUPPRESSION_COUNT = get_int_env("EMAIL_FAILED_SUPPRESSION_COUNT", 2)
+    BLOCKED_EMAIL_DOMAINS = os.getenv("BLOCKED_EMAIL_DOMAINS", "").strip()
+    REGISTER_HONEYPOT_FIELDS = ["website", "company_website"]
+    REQUIRE_VERIFIED_EMAIL_FOR_CUSTOMER_ORDER = get_bool_env(
+        "REQUIRE_VERIFIED_EMAIL_FOR_CUSTOMER_ORDER",
+        True,
+    )
+
     # Email / SMTP config.
     # V1 can use Gmail App Password for testing.
     # Production should later move to a transactional provider such as
