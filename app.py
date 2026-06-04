@@ -5,6 +5,7 @@ from flask import Flask, session, request, send_from_directory, jsonify, abort
 
 from config import Config
 from db import close_db, init_db, get_db
+from services.abuse_guard import apply_abuse_route_limits, ensure_abuse_schema, init_abuse_guards
 
 
 def create_app():
@@ -15,6 +16,7 @@ def create_app():
         days=int(app.config.get("PERMANENT_SESSION_LIFETIME_DAYS", 30))
     )
 
+    init_abuse_guards(app)
     app.teardown_appcontext(close_db)
 
     register_upload_routes(app)
@@ -22,9 +24,11 @@ def create_app():
 
     with app.app_context():
         init_db(app)
+        ensure_abuse_schema(app)
 
     register_context(app)
     register_routes(app)
+    apply_abuse_route_limits(app)
 
     return app
 
