@@ -35,6 +35,21 @@
       </select>
     </div>
 
+    {% if register_invite_required %}
+      <div class="form-group">
+        <label>註冊碼</label>
+        <input
+          name="invite_code"
+          required
+          autocomplete="off"
+          placeholder="請輸入 FUMAP GO 提供的註冊碼"
+        >
+        <p class="muted" style="margin-top:6px;">
+          目前為 pilot 註冊模式，請使用團隊提供的註冊碼。
+        </p>
+      </div>
+    {% endif %}
+
     <div class="form-group">
       <label>登入 ID</label>
       <input
@@ -97,6 +112,9 @@
         placeholder="請再次輸入密碼"
       >
     </div>
+
+    {% set turnstile_action = 'register' %}
+    {% include "mobile/_turnstile.html" %}
 
     <button class="btn" type="submit">建立帳號</button>
   </form>
