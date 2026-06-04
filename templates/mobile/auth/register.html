@@ -11,6 +11,15 @@
   </p>
 
   <form method="post" action="/register">
+    <div class="form-group" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden;">
+      <label>Website</label>
+      <input
+        name="website"
+        tabindex="-1"
+        autocomplete="off"
+      >
+    </div>
+
     <div class="form-group">
       <label>角色</label>
       <select name="role">
