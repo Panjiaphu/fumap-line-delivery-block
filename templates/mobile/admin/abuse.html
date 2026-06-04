@@ -1,34 +1,127 @@
 {% extends "mobile/layout.html" %}
 
 {% block title %}Admin Abuse Cleanup｜{{ APP_NAME }}{% endblock %}
-{% block subtitle %}未驗證帳號、IP 統計、Email suppression{% endblock %}
+{% block subtitle %}未驗證帳號、IP 統計、Email suppression、bounce automation{% endblock %}
 
 {% block content %}
 <section class="card">
   <h2>Abuse Cleanup</h2>
   <p class="muted">
-    查看未驗證帳號、註冊 IP、Email domain 與 suppression 清單。
+    查看未驗證帳號、註冊 IP、Email domain、bounce 與 suppression 清單。
     LINE 綁定只作為通知輔助，不作為必填條件。
   </p>
 
   <div class="grid-2">
-    <div>
-      <span class="muted">總帳號</span>
-      <h3>{{ summary.total_users }}</h3>
-    </div>
-    <div>
-      <span class="muted">Email 未驗證</span>
-      <h3>{{ summary.unverified_email_users }}</h3>
-    </div>
-    <div>
-      <span class="muted">非 active 帳號</span>
-      <h3>{{ summary.inactive_users }}</h3>
-    </div>
-    <div>
-      <span class="muted">Suppression</span>
-      <h3>{{ suppressions|length }}</h3>
-    </div>
+    <div><span class="muted">總帳號</span><h3>{{ summary.total_users }}</h3></div>
+    <div><span class="muted">Email 未驗證</span><h3>{{ summary.unverified_email_users }}</h3></div>
+    <div><span class="muted">非 active 帳號</span><h3>{{ summary.inactive_users }}</h3></div>
+    <div><span class="muted">Suppression</span><h3>{{ suppressions|length }}</h3></div>
+    <div><span class="muted">Bounce events</span><h3>{{ summary.total_bounces or 0 }}</h3></div>
+    <div><span class="muted">Bounced emails</span><h3>{{ summary.bounced_emails or 0 }}</h3></div>
   </div>
+</section>
+
+<section class="card">
+  <h2>Filter / Search</h2>
+  <form method="get" action="/admin/abuse">
+    <div class="grid-2">
+      <div class="form-group">
+        <label>Role</label>
+        <select name="role">
+          <option value="" {% if not filters.role %}selected{% endif %}>All</option>
+          <option value="CUSTOMER" {% if filters.role == 'CUSTOMER' %}selected{% endif %}>Customer</option>
+          <option value="STORE" {% if filters.role == 'STORE' %}selected{% endif %}>Store</option>
+          <option value="DRIVER" {% if filters.role == 'DRIVER' %}selected{% endif %}>Shiper</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Search</label>
+        <input name="q" value="{{ filters.q }}" placeholder="email / login / name / phone">
+      </div>
+
+      <div class="form-group">
+        <label>Register IP</label>
+        <input name="ip" value="{{ filters.ip }}" placeholder="203.0.113.10">
+      </div>
+
+      <div class="form-group">
+        <label>Email domain</label>
+        <input name="domain" value="{{ filters.domain }}" placeholder="gmail.com">
+      </div>
+
+      <div class="form-group">
+        <label>Per page</label>
+        <select name="per_page">
+          {% for n in [25, 50, 100, 200] %}
+            <option value="{{ n }}" {% if filters.per_page == n %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <button class="btn" type="submit">Apply filters</button>
+    <a class="btn secondary" href="/admin/abuse">Clear</a>
+    <a class="btn secondary" href="{{ pagination.export_url }}">Export filtered CSV</a>
+  </form>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h2>Register by day</h2>
+    {% for row in register_day_chart %}
+      {% set width = 100 if row.user_count|int > 20 else row.user_count|int * 5 %}
+      <p>
+        <b>{{ row.bucket }}</b>
+        <span class="badge">{{ row.user_count }} users</span>
+        <span class="badge warn">{{ row.unverified_count or 0 }} unverified</span>
+      </p>
+      <div style="height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
+        <div style="height:8px;width:{{ width }}%;background:#0b4ea2;"></div>
+      </div>
+    {% else %}
+      <p class="muted">尚無資料。</p>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>Register by hour</h2>
+    {% for row in register_hour_chart %}
+      {% set width = 100 if row.user_count|int > 20 else row.user_count|int * 5 %}
+      <p>
+        <b>{{ row.bucket or '??' }}:00</b>
+        <span class="badge">{{ row.user_count }} users</span>
+        <span class="badge warn">{{ row.unverified_count or 0 }} unverified</span>
+      </p>
+      <div style="height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
+        <div style="height:8px;width:{{ width }}%;background:#06c755;"></div>
+      </div>
+    {% else %}
+      <p class="muted">尚無資料。</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>Gmail Bounce Automation</h2>
+  <p class="muted">
+    Khi bật `BOUNCE_IMAP_ENABLED=true` và cấu hình Gmail App Password, admin có thể bấm sync để đọc bounce mail,
+    lưu vào bảng bounce riêng và tự đưa email bounce vào suppression.
+  </p>
+  <form method="post" action="/admin/abuse/bounces/sync">
+    <button class="btn" type="submit">Sync Gmail bounces</button>
+    <a class="btn secondary" href="/admin/abuse/export/bounces">Export bounces CSV</a>
+  </form>
+
+  {% for row in bounces %}
+    <div style="border-bottom:1px solid #e5e7eb;padding:10px 0;">
+      <b>{{ row.recipient_email }}</b>
+      <span class="badge warn">{{ row.bounce_reason or 'bounce' }}</span><br>
+      <span class="muted">{{ row.created_at or '-' }}｜{{ row.sender or '-' }}｜{{ row.message_subject or '-' }}</span>
+    </div>
+  {% else %}
+    <p class="muted">Chưa có bounce event.</p>
+  {% endfor %}
 </section>
 
 <section class="card">
@@ -44,6 +137,62 @@
     </div>
     <button class="btn" type="submit">加入 suppression</button>
   </form>
+</section>
+
+<section class="card">
+  <h2>Email 未驗證帳號</h2>
+  <p class="muted">
+    Showing page {{ pagination.page }} / {{ pagination.total_pages }}｜Total {{ pagination.total }}
+  </p>
+
+  <form method="post" action="/admin/abuse/bulk">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="btn danger" name="action" value="block" type="submit">Bulk block</button>
+      <button class="btn secondary" name="action" value="suppress" type="submit">Bulk suppress email</button>
+      <button class="btn secondary" name="action" value="delete" type="submit">Bulk delete/suspend</button>
+    </div>
+
+    {% for u in unverified_users %}
+      <div style="border-bottom:1px solid #e5e7eb;padding:12px 0;">
+        <label class="check-row">
+          <input type="checkbox" name="user_ids" value="{{ u.id }}">
+          <span><b>#{{ u.id }}｜{{ u.login_id }}｜{{ u.role }}</b></span>
+        </label>
+        <span class="muted">
+          {{ u.email or '-' }}｜{{ u.display_name or '-' }}｜{{ u.phone or '-' }}<br>
+          IP: {{ u.register_ip or '-' }}<br>
+          UA: {{ u.user_agent or '-' }}<br>
+          created: {{ u.created_at or '-' }}｜verify sends: {{ u.verify_send_count or 0 }}｜failed emails: {{ u.failed_email_count or 0 }}｜orders: {{ u.order_count or 0 }}
+        </span>
+
+        <form method="post" action="/admin/abuse/users/{{ u.id }}/block" style="margin-top:8px;">
+          <input type="hidden" name="reason" value="Unverified suspected spam account">
+          <button class="btn danger" type="submit">停用 spam 帳號</button>
+        </form>
+
+        {% if (u.order_count or 0) == 0 %}
+          <form method="post" action="/admin/abuse/users/{{ u.id }}/delete" style="margin-top:8px;">
+            <button class="btn secondary" type="submit">刪除無訂單 spam 帳號</button>
+          </form>
+        {% endif %}
+
+        {% if u.email %}
+          <form method="post" action="/admin/abuse/suppressions" style="margin-top:8px;">
+            <input type="hidden" name="email" value="{{ u.email }}">
+            <input type="hidden" name="reason" value="Admin suppressed from unverified spam cleanup">
+            <button class="btn secondary" type="submit">加入 Email suppression</button>
+          </form>
+        {% endif %}
+      </div>
+    {% else %}
+      <p class="muted">目前沒有符合條件的 Email 未驗證帳號。</p>
+    {% endfor %}
+  </form>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    {% if pagination.prev_url %}<a class="btn secondary" href="{{ pagination.prev_url }}">Prev</a>{% endif %}
+    {% if pagination.next_url %}<a class="btn secondary" href="{{ pagination.next_url }}">Next</a>{% endif %}
+  </div>
 </section>
 
 <section class="card">
@@ -63,43 +212,8 @@
 </section>
 
 <section class="card">
-  <h2>Email 未驗證帳號</h2>
-  {% for u in unverified_users %}
-    <div style="border-bottom:1px solid #e5e7eb;padding:12px 0;">
-      <b>#{{ u.id }}｜{{ u.login_id }}｜{{ u.role }}</b><br>
-      <span class="muted">
-        {{ u.email or '-' }}｜{{ u.display_name or '-' }}｜{{ u.phone or '-' }}<br>
-        IP: {{ u.register_ip or '-' }}<br>
-        UA: {{ u.user_agent or '-' }}<br>
-        created: {{ u.created_at or '-' }}｜verify sends: {{ u.verify_send_count or 0 }}｜failed emails: {{ u.failed_email_count or 0 }}｜orders: {{ u.order_count or 0 }}
-      </span>
-
-      <form method="post" action="/admin/abuse/users/{{ u.id }}/block" style="margin-top:8px;">
-        <input type="hidden" name="reason" value="Unverified suspected spam account">
-        <button class="btn danger" type="submit">停用 spam 帳號</button>
-      </form>
-
-      {% if (u.order_count or 0) == 0 %}
-        <form method="post" action="/admin/abuse/users/{{ u.id }}/delete" style="margin-top:8px;">
-          <button class="btn secondary" type="submit">刪除無訂單 spam 帳號</button>
-        </form>
-      {% endif %}
-
-      {% if u.email %}
-        <form method="post" action="/admin/abuse/suppressions" style="margin-top:8px;">
-          <input type="hidden" name="email" value="{{ u.email }}">
-          <input type="hidden" name="reason" value="Admin suppressed from unverified spam cleanup">
-          <button class="btn secondary" type="submit">加入 Email suppression</button>
-        </form>
-      {% endif %}
-    </div>
-  {% else %}
-    <p class="muted">目前沒有 Email 未驗證帳號。</p>
-  {% endfor %}
-</section>
-
-<section class="card">
   <h2>註冊 IP 統計</h2>
+  <a class="btn secondary" href="/admin/abuse/export/ip">Export IP CSV</a>
   {% for row in ip_stats %}
     <p>
       <b>{{ row.register_ip }}</b>
@@ -114,6 +228,7 @@
 
 <section class="card">
   <h2>Email Domain 統計</h2>
+  <a class="btn secondary" href="/admin/abuse/export/domain">Export domain CSV</a>
   {% for row in domain_stats %}
     <p>
       <b>{{ row.domain }}</b>
@@ -128,6 +243,7 @@
 
 <section class="card">
   <h2>Email 統計</h2>
+  <a class="btn secondary" href="/admin/abuse/export/email">Export email CSV</a>
   {% for row in email_stats %}
     <p>
       <b>{{ row.email }}</b>
