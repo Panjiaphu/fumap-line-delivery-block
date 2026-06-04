@@ -76,6 +76,17 @@ class Config:
         True,
     )
 
+    TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "").strip()
+    TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+    TURNSTILE_ENABLED = get_bool_env("TURNSTILE_ENABLED", bool(TURNSTILE_SECRET_KEY))
+    REGISTER_TURNSTILE_ENABLED = get_bool_env("REGISTER_TURNSTILE_ENABLED", TURNSTILE_ENABLED)
+    LOGIN_TURNSTILE_ENABLED = get_bool_env("LOGIN_TURNSTILE_ENABLED", TURNSTILE_ENABLED)
+    VERIFY_RESEND_TURNSTILE_ENABLED = get_bool_env("VERIFY_RESEND_TURNSTILE_ENABLED", TURNSTILE_ENABLED)
+    CHECKOUT_TURNSTILE_ENABLED = get_bool_env("CHECKOUT_TURNSTILE_ENABLED", False)
+
+    REGISTER_REQUIRE_INVITE_CODE = get_bool_env("REGISTER_REQUIRE_INVITE_CODE", False)
+    REGISTER_INVITE_CODES = os.getenv("REGISTER_INVITE_CODES", "").strip()
+
     # Email / SMTP config.
     # V1 can use Gmail App Password for testing.
     # Production should later move to a transactional provider such as
