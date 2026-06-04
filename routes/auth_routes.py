@@ -10,6 +10,7 @@ from flask import (
 )
 
 from db import get_db
+from services.abuse_guard import get_client_ip, get_user_agent
 from services.auth_service import (
     AuthError,
     REGISTER_ROLES,
@@ -133,6 +134,9 @@ def register_submit():
             phone=phone,
             email=email,
             role=role,
+            register_ip=get_client_ip(),
+            user_agent=get_user_agent(),
+            risk_score=0,
         )
 
         create_auth_block(
@@ -144,6 +148,9 @@ def register_submit():
                 "role": user["role"],
                 "display_name": user["display_name"],
                 "email_saved": bool(user["email"] if "email" in user.keys() else ""),
+                "register_ip": user["register_ip"] if "register_ip" in user.keys() else "",
+                "user_agent_saved": bool(user["user_agent"] if "user_agent" in user.keys() else ""),
+                "line_bind_required": False,
             },
             commit=True,
         )
@@ -210,6 +217,25 @@ def verify_email_page():
         print(f"[AUTH][VERIFY_EMAIL][ERROR] {exc}")
         flash("驗證連結已失效，請重新申請。", "danger")
         return redirect("/login")
+
+
+@auth_bp.get("/account/email/resend")
+@login_required
+def resend_email_verification_page():
+    user = current_user()
+
+    if not user:
+        flash("請重新登入。", "warning")
+        return redirect("/login")
+
+    if user["role"] == "ADMIN_OPERATOR":
+        flash("Admin 設定帳號目前不支援 Email 驗證。", "warning")
+        return redirect("/admin")
+
+    return render_template(
+        "mobile/auth/resend_verification.html",
+        user=user,
+    )
 
 
 @auth_bp.post("/account/email/resend")
