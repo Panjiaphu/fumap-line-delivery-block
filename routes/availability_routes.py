@@ -72,6 +72,19 @@ def _active_count(db, row):
     return int(out["c"] or 0) if out else 0
 
 
+def _device_count(db, row):
+    out = db.execute(
+        """
+        SELECT COUNT(DISTINCT device_fingerprint) AS c
+        FROM availability_sessions
+        WHERE actor_role = ? AND actor_external_id = ? AND status = 'ACTIVE'
+          AND COALESCE(device_fingerprint, '') <> ''
+        """,
+        (row["actor_role"], row["actor_external_id"]),
+    ).fetchone()
+    return int(out["c"] or 0) if out else 0
+
+
 def _used_today(db, row):
     today = datetime.now(timezone.utc).date().isoformat()
     out = db.execute(
@@ -99,6 +112,8 @@ def _close_state(db, row):
         notes.append("heartbeat_timeout")
     if _active_count(db, row) > 1:
         notes.append("duplicate_active_session")
+    if _device_count(db, row) > 1:
+        notes.append("multi_device_detected")
     remain = max(0, DAILY_CAP_MINUTES - _used_today(db, row))
     if remain <= 0:
         notes.append("daily_cap_reached")
@@ -106,7 +121,7 @@ def _close_state(db, row):
     elif minutes > remain:
         notes.append("daily_cap_applied")
         minutes = remain
-    if pings < 2 or "heartbeat_timeout" in notes or "duplicate_active_session" in notes:
+    if pings < 2 or "heartbeat_timeout" in notes or "duplicate_active_session" in notes or "multi_device_detected" in notes:
         state = "REVIEW"
     elif minutes < 60:
         state = "NOT_ELIGIBLE"
