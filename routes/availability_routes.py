@@ -48,7 +48,19 @@ def _idle_seconds(row):
     return int((datetime.now(timezone.utc) - seen).total_seconds())
 
 
-def _close_state(row):
+def _active_count(db, row):
+    out = db.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM availability_sessions
+        WHERE actor_role = ? AND actor_external_id = ? AND status = 'ACTIVE'
+        """,
+        (row["actor_role"], row["actor_external_id"]),
+    ).fetchone()
+    return int(out["c"] or 0) if out else 0
+
+
+def _close_state(db, row):
     minutes = _minutes(row)
     pings = int(row["ping_count"] or 0)
     notes = []
@@ -58,7 +70,9 @@ def _close_state(row):
         notes.append("below_60_minutes")
     if _idle_seconds(row) > MAX_IDLE_SECONDS:
         notes.append("heartbeat_timeout")
-    if pings < 2 or "heartbeat_timeout" in notes:
+    if _active_count(db, row) > 1:
+        notes.append("duplicate_active_session")
+    if pings < 2 or "heartbeat_timeout" in notes or "duplicate_active_session" in notes:
         state = "REVIEW"
     elif minutes < 60:
         state = "NOT_ELIGIBLE"
@@ -114,7 +128,7 @@ def close_session():
     if row["status"] != "ACTIVE":
         return jsonify({"ok": True, "session": as_dict(row)})
 
-    state, minutes, points, note = _close_state(row)
+    state, minutes, points, note = _close_state(db, row)
     db.execute(
         """
         UPDATE availability_sessions
