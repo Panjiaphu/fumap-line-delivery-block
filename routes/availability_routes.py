@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, session
 from db import get_db
 from services.availability_core import as_dict, ping, row_by_id, row_by_key, session_key
 from services.permission_service import is_logged_in
+from services.reward_audit_snapshot_service import create_reward_snapshot
 from services.timeblock_gateway_service import (
     forward_event_to_timeblock,
     get_outbound_event,
@@ -155,6 +156,13 @@ def _availability_event(db, row):
     return {"created": created, "forward_result": result, "outbound_event_id": out["id"], "status": out["status"]}
 
 
+def _review_row(db, review_id):
+    return db.execute(
+        "SELECT * FROM availability_reward_reviews WHERE id = ? LIMIT 1",
+        (review_id,),
+    ).fetchone()
+
+
 def _review_and_event(db, row):
     if row["status"] not in {"CANDIDATE", "REVIEW"}:
         return None
@@ -202,7 +210,9 @@ def _review_and_event(db, row):
             (now, review_id),
         )
         db.commit()
-        return {"review_id": review_id, "status": "MANUAL_REVIEW_REQUIRED"}
+        review = _review_row(db, review_id)
+        snapshot_id = create_reward_snapshot(db, row, review, {"stage": "MANUAL_REVIEW_REQUIRED"})
+        return {"review_id": review_id, "status": "MANUAL_REVIEW_REQUIRED", "snapshot_id": snapshot_id}
 
     event_result = _availability_event(db, row)
     outbound_id = event_result.get("outbound_event_id") if event_result else None
@@ -216,7 +226,9 @@ def _review_and_event(db, row):
         (outbound_id, now, now, review_id),
     )
     db.commit()
-    return {"review_id": review_id, "status": "AUTO_APPROVED", "event": event_result}
+    review = _review_row(db, review_id)
+    snapshot_id = create_reward_snapshot(db, row, review, {"stage": "AUTO_APPROVED"})
+    return {"review_id": review_id, "status": "AUTO_APPROVED", "event": event_result, "snapshot_id": snapshot_id}
 
 
 @availability_bp.post("/heartbeat")
