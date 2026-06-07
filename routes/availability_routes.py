@@ -10,6 +10,7 @@ from services.permission_service import is_logged_in
 availability_bp = Blueprint("availability", __name__, url_prefix="/api/availability")
 
 MAX_IDLE_SECONDS = 180
+DAILY_CAP_MINUTES = 480
 
 
 def _auth_ok():
@@ -60,6 +61,21 @@ def _active_count(db, row):
     return int(out["c"] or 0) if out else 0
 
 
+def _used_today(db, row):
+    today = datetime.now(timezone.utc).date().isoformat()
+    out = db.execute(
+        """
+        SELECT COALESCE(SUM(eligible_minutes), 0) AS m
+        FROM availability_sessions
+        WHERE actor_role = ? AND actor_external_id = ?
+          AND substr(COALESCE(ended_at, updated_at, created_at), 1, 10) = ?
+          AND status = 'CANDIDATE'
+        """,
+        (row["actor_role"], row["actor_external_id"], today),
+    ).fetchone()
+    return int(out["m"] or 0) if out else 0
+
+
 def _close_state(db, row):
     minutes = _minutes(row)
     pings = int(row["ping_count"] or 0)
@@ -72,6 +88,13 @@ def _close_state(db, row):
         notes.append("heartbeat_timeout")
     if _active_count(db, row) > 1:
         notes.append("duplicate_active_session")
+    remain = max(0, DAILY_CAP_MINUTES - _used_today(db, row))
+    if remain <= 0:
+        notes.append("daily_cap_reached")
+        minutes = 0
+    elif minutes > remain:
+        notes.append("daily_cap_applied")
+        minutes = remain
     if pings < 2 or "heartbeat_timeout" in notes or "duplicate_active_session" in notes:
         state = "REVIEW"
     elif minutes < 60:
