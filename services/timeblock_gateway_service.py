@@ -87,6 +87,10 @@ def ensure_timeblock_gateway_schema(app=None):
                 payload_json TEXT,
                 response_json TEXT,
                 error_message TEXT,
+                retry_count INTEGER DEFAULT 0,
+                next_retry_at TEXT,
+                last_attempt_at TEXT,
+                last_error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
                 forwarded_at TEXT,
@@ -104,8 +108,23 @@ def ensure_timeblock_gateway_schema(app=None):
 
             CREATE INDEX IF NOT EXISTS idx_timeblock_outbound_status
             ON timeblock_outbound_events(status);
+
+            CREATE INDEX IF NOT EXISTS idx_timeblock_outbound_next_retry
+            ON timeblock_outbound_events(status, next_retry_at);
             """
         )
+
+        for column_sql in [
+            "ALTER TABLE timeblock_outbound_events ADD COLUMN retry_count INTEGER DEFAULT 0",
+            "ALTER TABLE timeblock_outbound_events ADD COLUMN next_retry_at TEXT",
+            "ALTER TABLE timeblock_outbound_events ADD COLUMN last_attempt_at TEXT",
+            "ALTER TABLE timeblock_outbound_events ADD COLUMN last_error TEXT",
+        ]:
+            try:
+                conn.execute(column_sql)
+            except sqlite3.OperationalError:
+                pass
+
         conn.commit()
     finally:
         conn.close()
