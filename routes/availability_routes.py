@@ -5,6 +5,11 @@ from flask import Blueprint, jsonify, request, session
 from db import get_db
 from services.availability_core import as_dict, ping, row_by_id, row_by_key, session_key
 from services.permission_service import is_logged_in
+from services.timeblock_gateway_service import (
+    forward_event_to_timeblock,
+    get_outbound_event,
+    record_outbound_event,
+)
 
 
 availability_bp = Blueprint("availability", __name__, url_prefix="/api/availability")
@@ -105,6 +110,31 @@ def _close_state(db, row):
     return state, minutes, points, ",".join(notes)
 
 
+def _availability_event(db, row):
+    if row["status"] != "CANDIDATE" or int(row["reward_points"] or 0) <= 0:
+        return None
+    code = "STORE_ONLINE_REWARD_FINALIZED" if row["actor_role"] == "STORE" else "SHIPPER_ONLINE_REWARD_FINALIZED"
+    event = {
+        "source_project": "fumapgo",
+        "event_code": code,
+        "external_event_id": f"availability:{row['id']}",
+        "idempotency_key": f"fumapgo:availability:{row['id']}",
+        "actor_role": row["actor_role"],
+        "actor_external_id": row["actor_external_id"],
+        "points_delta": int(row["reward_points"] or 0),
+        "occurred_at": row["ended_at"] or datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "session_id": row["id"],
+            "session_key": row["session_key"],
+            "eligible_minutes": int(row["eligible_minutes"] or 0),
+        },
+    }
+    out, created = record_outbound_event(db, event)
+    result = forward_event_to_timeblock(db, out) if created else {"duplicate": True}
+    out = get_outbound_event(db, out["id"])
+    return {"created": created, "forward_result": result, "outbound_event_id": out["id"], "status": out["status"]}
+
+
 @availability_bp.post("/heartbeat")
 def heartbeat():
     if not _auth_ok():
@@ -163,4 +193,5 @@ def close_session():
     )
     db.commit()
     row = row_by_key(db, key)
-    return jsonify({"ok": True, "state": state, "session": as_dict(row)})
+    event_result = _availability_event(db, row)
+    return jsonify({"ok": True, "state": state, "session": as_dict(row), "timeblock_event": event_result})
