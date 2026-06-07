@@ -132,8 +132,6 @@ def _close_state(db, row):
 
 
 def _availability_event(db, row):
-    if row["status"] != "CANDIDATE" or int(row["reward_points"] or 0) <= 0:
-        return None
     code = "STORE_ONLINE_REWARD_FINALIZED" if row["actor_role"] == "STORE" else "SHIPPER_ONLINE_REWARD_FINALIZED"
     event = {
         "source_project": "fumapgo",
@@ -148,12 +146,55 @@ def _availability_event(db, row):
             "session_id": row["id"],
             "session_key": row["session_key"],
             "eligible_minutes": int(row["eligible_minutes"] or 0),
+            "contract_version": "v1",
         },
     }
     out, created = record_outbound_event(db, event)
     result = forward_event_to_timeblock(db, out) if created else {"duplicate": True}
     out = get_outbound_event(db, out["id"])
     return {"created": created, "forward_result": result, "outbound_event_id": out["id"], "status": out["status"]}
+
+
+def _review_and_event(db, row):
+    if row["status"] != "CANDIDATE" or int(row["reward_points"] or 0) <= 0:
+        return None
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    existing = db.execute(
+        "SELECT * FROM availability_reward_reviews WHERE session_id = ? LIMIT 1",
+        (row["id"],),
+    ).fetchone()
+
+    if existing and existing["outbound_event_id"]:
+        return {"review_id": existing["id"], "status": existing["status"], "outbound_event_id": existing["outbound_event_id"]}
+
+    if not existing:
+        cur = db.execute(
+            """
+            INSERT INTO availability_reward_reviews
+            (source_project, session_id, actor_role, actor_external_id, points_delta,
+             status, review_reason, auto_review_result, created_at, updated_at)
+            VALUES ('fumapgo', ?, ?, ?, ?, 'PENDING_REWARD', ?, 'CLEAN', ?, ?)
+            """,
+            (row["id"], row["actor_role"], row["actor_external_id"], int(row["reward_points"] or 0), row["review_reason"] or "", now, now),
+        )
+        review_id = cur.lastrowid
+    else:
+        review_id = existing["id"]
+
+    event_result = _availability_event(db, row)
+    outbound_id = event_result.get("outbound_event_id") if event_result else None
+    db.execute(
+        """
+        UPDATE availability_reward_reviews
+        SET status = 'AUTO_APPROVED', auto_review_result = 'CLEAN',
+            outbound_event_id = ?, approved_at = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (outbound_id, now, now, review_id),
+    )
+    db.commit()
+    return {"review_id": review_id, "status": "AUTO_APPROVED", "event": event_result}
 
 
 @availability_bp.post("/heartbeat")
@@ -230,5 +271,5 @@ def close_session():
     )
     db.commit()
     row = row_by_key(db, key)
-    event_result = _availability_event(db, row)
-    return jsonify({"ok": True, "state": state, "session": as_dict(row), "timeblock_event": event_result})
+    review_result = _review_and_event(db, row)
+    return jsonify({"ok": True, "state": state, "session": as_dict(row), "reward_review": review_result})
