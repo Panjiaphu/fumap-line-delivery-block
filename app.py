@@ -116,6 +116,7 @@ def register_routes(app):
         ("routes.store_routes", "store_bp"),
         ("routes.driver_routes", "driver_bp"),
         ("routes.admin_routes", "admin_bp"),
+        ("routes.admin_timeblock_routes", "admin_timeblock_bp"),
         ("routes.admin_abuse_routes", "admin_abuse_bp"),
         ("routes.admin_firewall_routes", "admin_firewall_bp"),
         ("routes.security_routes", "security_bp"),
