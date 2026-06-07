@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from flask import Blueprint, jsonify, request, session
 
 from db import get_db
@@ -14,6 +16,45 @@ def _auth_ok():
 
 def _payload():
     return request.get_json(silent=True) or {}
+
+
+def _parse_dt(value):
+    value = (value or "").strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        out = datetime.fromisoformat(value)
+    except Exception:
+        return None
+    if out.tzinfo is None:
+        out = out.replace(tzinfo=timezone.utc)
+    return out
+
+
+def _minutes(row):
+    started = _parse_dt(row["started_at"])
+    seen = _parse_dt(row["last_seen_at"])
+    if not started or not seen or seen < started:
+        return 0
+    return int((seen - started).total_seconds() // 60)
+
+
+def _close_state(row):
+    minutes = _minutes(row)
+    pings = int(row["ping_count"] or 0)
+    notes = []
+    if pings < 2:
+        notes.append("ping_count_too_low")
+    if minutes < 60:
+        notes.append("below_60_minutes")
+    if pings < 2:
+        state = "REVIEW"
+    elif minutes < 60:
+        state = "NOT_ELIGIBLE"
+    else:
+        state = "CANDIDATE"
+    points = 60 * (minutes // 60) if state == "CANDIDATE" else 0
+    return state, minutes, points, ",".join(notes)
 
 
 @availability_bp.post("/heartbeat")
@@ -62,7 +103,16 @@ def close_session():
     if row["status"] != "ACTIVE":
         return jsonify({"ok": True, "session": as_dict(row)})
 
-    db.execute("UPDATE availability_sessions SET status = 'CLOSED', ended_at = datetime('now'), updated_at = datetime('now') WHERE id = ?", (row["id"],))
+    state, minutes, points, note = _close_state(row)
+    db.execute(
+        """
+        UPDATE availability_sessions
+        SET status = ?, ended_at = datetime('now'), eligible_minutes = ?,
+            reward_points = ?, review_reason = ?, updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (state, minutes, points, note, row["id"]),
+    )
     db.commit()
     row = row_by_key(db, key)
-    return jsonify({"ok": True, "session": as_dict(row)})
+    return jsonify({"ok": True, "state": state, "session": as_dict(row)})
