@@ -256,6 +256,20 @@
       font-weight: 900;
     }
 
+    .role-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .timeblock-pill {
+      text-decoration: none;
+      background: rgba(255,255,255,.24);
+      border: 1px solid rgba(255,255,255,.28);
+    }
+
     @media (max-width: 430px) {
       .big-ring-overlay {
         padding: 10px;
@@ -290,19 +304,32 @@
           <p>{% block subtitle %}台灣在地買貨・外送・跑腿平台{% endblock %}</p>
         </div>
 
-        <span class="role-pill">
-          {% if current_role == 'CUSTOMER' %}
-            客戶
-          {% elif current_role == 'STORE' %}
-            店家
-          {% elif current_role == 'DRIVER' %}
-            Shiper
-          {% elif current_role == 'ADMIN_OPERATOR' %}
-            Admin
-          {% else %}
-            訪客
+        <div class="role-actions">
+          <span class="role-pill">
+            {% if current_role == 'CUSTOMER' %}
+              客戶
+            {% elif current_role == 'STORE' %}
+              店家
+            {% elif current_role == 'DRIVER' %}
+              Shiper
+            {% elif current_role == 'ADMIN_OPERATOR' %}
+              Admin
+            {% else %}
+              訪客
+            {% endif %}
+          </span>
+
+          {% if current_role in ['CUSTOMER', 'STORE', 'DRIVER'] %}
+            <a
+              class="role-pill timeblock-pill"
+              href="https://fumap-bot-life.onrender.com"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Timeblock
+            </a>
           {% endif %}
-        </span>
+        </div>
       </div>
     </header>
 
