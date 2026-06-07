@@ -55,6 +55,25 @@ def ensure_availability_session_schema(app=None):
             approved_at TEXT,
             UNIQUE(session_id)
         );
+
+        CREATE TABLE IF NOT EXISTS reward_audit_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_project TEXT NOT NULL DEFAULT 'fumapgo',
+            session_id INTEGER,
+            review_id INTEGER,
+            actor_role TEXT,
+            actor_external_id TEXT,
+            device_fingerprint TEXT,
+            ip_hash TEXT,
+            user_agent_hash TEXT,
+            eligible_minutes INTEGER DEFAULT 0,
+            reward_points INTEGER DEFAULT 0,
+            review_reason TEXT,
+            auto_review_result TEXT,
+            outbound_event_id INTEGER,
+            snapshot_json TEXT,
+            created_at TEXT NOT NULL
+        );
         """)
 
         for column_sql in [
@@ -76,6 +95,12 @@ def ensure_availability_session_schema(app=None):
 
         CREATE INDEX IF NOT EXISTS idx_availability_reviews_actor
         ON availability_reward_reviews(actor_role, actor_external_id);
+
+        CREATE INDEX IF NOT EXISTS idx_reward_audit_session
+        ON reward_audit_snapshots(session_id);
+
+        CREATE INDEX IF NOT EXISTS idx_reward_audit_actor
+        ON reward_audit_snapshots(actor_role, actor_external_id);
         """)
         conn.commit()
     finally:
