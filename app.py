@@ -6,8 +6,10 @@ from flask import Flask, session, request, send_from_directory, jsonify, abort
 from config import Config
 from db import close_db, init_db, get_db
 from services.abuse_guard import apply_abuse_route_limits, ensure_abuse_schema, init_abuse_guards
+from services.availability_session_service import ensure_availability_session_schema
 from services.bounce_service import ensure_bounce_schema
 from services.firewall_service import ensure_firewall_schema, init_firewall
+from services.timeblock_gateway_service import ensure_timeblock_gateway_schema
 
 
 def create_app():
@@ -30,6 +32,8 @@ def create_app():
         ensure_abuse_schema(app)
         ensure_firewall_schema(app)
         ensure_bounce_schema(app)
+        ensure_timeblock_gateway_schema(app)
+        ensure_availability_session_schema(app)
 
     register_context(app)
     register_routes(app)
@@ -139,46 +143,3 @@ def register_routes(app):
                 f"{module_name}.{blueprint_name}: {exc}"
             )
             traceback.print_exc()
-
-
-def register_context(app):
-    @app.context_processor
-    def inject_globals():
-        role = session.get("role", "")
-        user_id = session.get("user_id")
-        display_name = session.get("display_name", "")
-
-        try:
-            from services.turnstile_service import turnstile_widget_enabled_for
-        except Exception:
-            def turnstile_widget_enabled_for(action):
-                return False
-
-        return {
-            "APP_NAME": app.config.get("APP_NAME", "FUMAP GO"),
-            "current_role": role,
-            "current_user_id": user_id,
-            "current_display_name": display_name,
-            "is_logged_in": bool(user_id),
-            "is_admin": role == "ADMIN_OPERATOR",
-            "request_path": request.path,
-            "turnstile_site_key": app.config.get("TURNSTILE_SITE_KEY", ""),
-            "turnstile_enabled_for": turnstile_widget_enabled_for,
-            "register_invite_required": app.config.get("REGISTER_REQUIRE_INVITE_CODE", False),
-        }
-
-    @app.template_filter("twd")
-    def twd(value):
-        try:
-            amount = int(value or 0)
-        except Exception:
-            amount = 0
-
-        return f"{amount:,} TWD"
-
-
-app = create_app()
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
