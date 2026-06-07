@@ -156,7 +156,7 @@ def _availability_event(db, row):
 
 
 def _review_and_event(db, row):
-    if row["status"] != "CANDIDATE" or int(row["reward_points"] or 0) <= 0:
+    if row["status"] not in {"CANDIDATE", "REVIEW"}:
         return None
 
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -174,13 +174,35 @@ def _review_and_event(db, row):
             INSERT INTO availability_reward_reviews
             (source_project, session_id, actor_role, actor_external_id, points_delta,
              status, review_reason, auto_review_result, created_at, updated_at)
-            VALUES ('fumapgo', ?, ?, ?, ?, 'PENDING_REWARD', ?, 'CLEAN', ?, ?)
+            VALUES ('fumapgo', ?, ?, ?, ?, 'PENDING_REWARD', ?, ?, ?, ?)
             """,
-            (row["id"], row["actor_role"], row["actor_external_id"], int(row["reward_points"] or 0), row["review_reason"] or "", now, now),
+            (
+                row["id"],
+                row["actor_role"],
+                row["actor_external_id"],
+                int(row["reward_points"] or 0),
+                row["review_reason"] or "",
+                "CLEAN" if row["status"] == "CANDIDATE" else "RISK_FLAGS",
+                now,
+                now,
+            ),
         )
         review_id = cur.lastrowid
     else:
         review_id = existing["id"]
+
+    if row["status"] == "REVIEW":
+        db.execute(
+            """
+            UPDATE availability_reward_reviews
+            SET status = 'MANUAL_REVIEW_REQUIRED', auto_review_result = 'RISK_FLAGS',
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, review_id),
+        )
+        db.commit()
+        return {"review_id": review_id, "status": "MANUAL_REVIEW_REQUIRED"}
 
     event_result = _availability_event(db, row)
     outbound_id = event_result.get("outbound_event_id") if event_result else None
