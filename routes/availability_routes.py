@@ -9,6 +9,8 @@ from services.permission_service import is_logged_in
 
 availability_bp = Blueprint("availability", __name__, url_prefix="/api/availability")
 
+MAX_IDLE_SECONDS = 180
+
 
 def _auth_ok():
     return is_logged_in() or bool((request.headers.get("Authorization") or "").strip())
@@ -39,6 +41,13 @@ def _minutes(row):
     return int((seen - started).total_seconds() // 60)
 
 
+def _idle_seconds(row):
+    seen = _parse_dt(row["last_seen_at"])
+    if not seen:
+        return 999999
+    return int((datetime.now(timezone.utc) - seen).total_seconds())
+
+
 def _close_state(row):
     minutes = _minutes(row)
     pings = int(row["ping_count"] or 0)
@@ -47,7 +56,9 @@ def _close_state(row):
         notes.append("ping_count_too_low")
     if minutes < 60:
         notes.append("below_60_minutes")
-    if pings < 2:
+    if _idle_seconds(row) > MAX_IDLE_SECONDS:
+        notes.append("heartbeat_timeout")
+    if pings < 2 or "heartbeat_timeout" in notes:
         state = "REVIEW"
     elif minutes < 60:
         state = "NOT_ELIGIBLE"
