@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, session
@@ -16,6 +17,11 @@ availability_bp = Blueprint("availability", __name__, url_prefix="/api/availabil
 
 MAX_IDLE_SECONDS = 180
 DAILY_CAP_MINUTES = 480
+
+
+def _hash(value):
+    value = (value or "").strip()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
 
 
 def _auth_ok():
@@ -144,9 +150,25 @@ def heartbeat():
     role = data.get("actor_role") or session.get("role")
     actor_id = data.get("actor_external_id") or session.get("target_code") or session.get("user_id")
     client_id = data.get("client_session_id") or "default"
+    device_fingerprint = data.get("device_fingerprint") or request.headers.get("X-Device-Fingerprint") or ""
+    ip_hash = _hash(request.headers.get("X-Forwarded-For") or request.remote_addr or "")
+    user_agent_hash = _hash(request.headers.get("User-Agent") or "")
 
     try:
-        row, created = ping(get_db(), role, actor_id, client_id)
+        db = get_db()
+        row, created = ping(db, role, actor_id, client_id)
+        db.execute(
+            """
+            UPDATE availability_sessions
+            SET device_fingerprint = COALESCE(NULLIF(?, ''), device_fingerprint),
+                ip_hash = COALESCE(NULLIF(?, ''), ip_hash),
+                user_agent_hash = COALESCE(NULLIF(?, ''), user_agent_hash)
+            WHERE id = ?
+            """,
+            (device_fingerprint, ip_hash, user_agent_hash, row["id"]),
+        )
+        db.commit()
+        row = row_by_id(db, row["id"])
         return jsonify({"ok": True, "created": created, "session": as_dict(row)})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
