@@ -2,12 +2,14 @@ import json
 import os
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from services.block_service import create_block
 
 
 SOURCE_PROJECT = "fumapgo"
+MAX_RETRY_COUNT = 5
+RETRY_DELAYS_MINUTES = [5, 15, 60, 240]
 
 ALLOWED_EVENT_CODES = {
     "CUSTOMER_ORDER_CREATED",
@@ -270,14 +272,46 @@ def record_outbound_event(db, event):
     ).fetchone(), True
 
 
+def _retry_policy(row):
+    next_count = int(row["retry_count"] or 0) + 1
+    if next_count >= MAX_RETRY_COUNT:
+        return "DEAD_LETTER", next_count, ""
+
+    idx = min(next_count - 1, len(RETRY_DELAYS_MINUTES) - 1)
+    delay_minutes = RETRY_DELAYS_MINUTES[idx]
+    next_retry_at = (datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)).replace(microsecond=0).isoformat()
+    return "RETRY_PENDING", next_count, next_retry_at
+
+
 def _update_event_status(db, event_id, *, status, response=None, error=""):
     now = now_iso()
+    row = db.execute(
+        "SELECT * FROM timeblock_outbound_events WHERE id = ? LIMIT 1",
+        (event_id,),
+    ).fetchone()
+
+    retry_count = int(row["retry_count"] or 0) if row else 0
+    next_retry_at = row["next_retry_at"] if row else None
+    last_error = error or ""
+    last_attempt_at = now
+
+    if status == "FORWARDED":
+        retry_count = 0
+        next_retry_at = None
+        last_error = ""
+    elif status == "FAILED":
+        status, retry_count, next_retry_at = _retry_policy(row)
+
     db.execute(
         """
         UPDATE timeblock_outbound_events
         SET status = ?,
             response_json = ?,
             error_message = ?,
+            retry_count = ?,
+            next_retry_at = ?,
+            last_attempt_at = ?,
+            last_error = ?,
             updated_at = ?,
             forwarded_at = CASE WHEN ? = 'FORWARDED' THEN ? ELSE forwarded_at END
         WHERE id = ?
@@ -286,6 +320,10 @@ def _update_event_status(db, event_id, *, status, response=None, error=""):
             status,
             canonical_json(response or {}),
             error or "",
+            retry_count,
+            next_retry_at,
+            last_attempt_at,
+            last_error,
             now,
             status,
             now,
@@ -302,6 +340,8 @@ def _update_event_status(db, event_id, *, status, response=None, error=""):
         payload={
             "timeblock_outbound_event_id": event_id,
             "status": status,
+            "retry_count": retry_count,
+            "next_retry_at": next_retry_at,
             "error": error or "",
         },
         commit=False,
