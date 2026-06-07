@@ -82,6 +82,7 @@ def register_routes(app):
         ("routes.admin_timeblock_retry_routes", "admin_timeblock_retry_bp"),
         ("routes.admin_timeblock_dead_letter_routes", "admin_timeblock_dead_letter_bp"),
         ("routes.admin_timeblock_contract_routes", "admin_timeblock_contract_bp"),
+        ("routes.admin_timeblock_review_routes", "admin_timeblock_review_bp"),
         ("routes.timeblock_gateway_routes", "timeblock_gateway_bp"),
         ("routes.availability_routes", "availability_bp"),
         ("routes.admin_abuse_routes", "admin_abuse_bp"),
