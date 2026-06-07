@@ -43,69 +43,27 @@ def create_app():
 
 
 def register_upload_routes(app):
-    """
-    Serve uploaded files from persistent disk.
-
-    Render production env:
-    - UPLOAD_ROOT=/var/data/uploads
-    - UPLOAD_URL_PREFIX=/uploads
-    """
-
     @app.route("/uploads/<path:filename>")
     def uploaded_file(filename):
         safe_name = (filename or "").replace("\\", "/").lstrip("/")
-
         if safe_name.startswith("proofs/"):
             abort(403)
-
         return send_from_directory(app.config["UPLOAD_ROOT"], safe_name)
 
+
 def register_health_routes(app):
-    """
-    Lightweight health endpoints for Render / uptime checks.
-
-    /health:
-      Does not touch database. Use for basic process health.
-
-    /health/db:
-      Touches SQLite with SELECT 1. Use manually or for deeper checks.
-    """
-
     @app.get("/health")
     def health():
-        return jsonify(
-            {
-                "ok": True,
-                "app": app.config.get("APP_NAME", "FUMAP GO"),
-                "status": "healthy",
-            }
-        )
+        return jsonify({"ok": True, "app": app.config.get("APP_NAME", "FUMAP GO"), "status": "healthy"})
 
     @app.get("/health/db")
     def health_db():
         try:
             db = get_db()
             db.execute("SELECT 1").fetchone()
-
-            return jsonify(
-                {
-                    "ok": True,
-                    "app": app.config.get("APP_NAME", "FUMAP GO"),
-                    "status": "healthy",
-                    "db": "ok",
-                    "database_path": app.config.get("DATABASE_PATH", ""),
-                }
-            )
+            return jsonify({"ok": True, "app": app.config.get("APP_NAME", "FUMAP GO"), "status": "healthy", "db": "ok", "database_path": app.config.get("DATABASE_PATH", "")})
         except Exception as exc:
-            return jsonify(
-                {
-                    "ok": False,
-                    "app": app.config.get("APP_NAME", "FUMAP GO"),
-                    "status": "unhealthy",
-                    "db": "error",
-                    "error": str(exc),
-                }
-            ), 500
+            return jsonify({"ok": False, "app": app.config.get("APP_NAME", "FUMAP GO"), "status": "unhealthy", "db": "error", "error": str(exc)}), 500
 
 
 def register_routes(app):
@@ -138,8 +96,45 @@ def register_routes(app):
             app.register_blueprint(blueprint)
             print(f"[BOOT] registered blueprint: {module_name}.{blueprint_name}")
         except Exception as exc:
-            print(
-                f"[BOOT][ERROR] failed to register blueprint: "
-                f"{module_name}.{blueprint_name}: {exc}"
-            )
+            print(f"[BOOT][ERROR] failed to register blueprint: {module_name}.{blueprint_name}: {exc}")
             traceback.print_exc()
+
+
+def register_context(app):
+    @app.context_processor
+    def inject_globals():
+        role = session.get("role", "")
+        user_id = session.get("user_id")
+        display_name = session.get("display_name", "")
+        try:
+            from services.turnstile_service import turnstile_widget_enabled_for
+        except Exception:
+            def turnstile_widget_enabled_for(action):
+                return False
+        return {
+            "APP_NAME": app.config.get("APP_NAME", "FUMAP GO"),
+            "current_role": role,
+            "current_user_id": user_id,
+            "current_display_name": display_name,
+            "is_logged_in": bool(user_id),
+            "is_admin": role == "ADMIN_OPERATOR",
+            "request_path": request.path,
+            "turnstile_site_key": app.config.get("TURNSTILE_SITE_KEY", ""),
+            "turnstile_enabled_for": turnstile_widget_enabled_for,
+            "register_invite_required": app.config.get("REGISTER_REQUIRE_INVITE_CODE", False),
+        }
+
+    @app.template_filter("twd")
+    def twd(value):
+        try:
+            amount = int(value or 0)
+        except Exception:
+            amount = 0
+        return f"{amount:,} TWD"
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
