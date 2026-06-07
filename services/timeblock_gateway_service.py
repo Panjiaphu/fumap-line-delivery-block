@@ -5,6 +5,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from services.block_service import create_block
+from services.timeblock_contract_service import apply_contract_version
 
 
 SOURCE_PROJECT = "fumapgo"
@@ -179,7 +180,7 @@ def validate_event_payload(data):
     if points_delta < 0:
         errors.append("points_delta cannot be negative from FUMAP GO gateway")
 
-    normalized = {
+    normalized = apply_contract_version({
         "source_project": SOURCE_PROJECT,
         "event_code": event_code,
         "external_event_id": external_event_id,
@@ -189,12 +190,13 @@ def validate_event_payload(data):
         "points_delta": points_delta,
         "occurred_at": occurred_at,
         "payload": data.get("payload") or {},
-    }
+    })
 
     return len(errors) == 0, errors, normalized
 
 
 def record_outbound_event(db, event):
+    event = apply_contract_version(event)
     existing = db.execute(
         """
         SELECT *
@@ -256,6 +258,7 @@ def record_outbound_event(db, event):
             "external_event_id": event["external_event_id"],
             "idempotency_key": event["idempotency_key"],
             "points_delta": int(event.get("points_delta") or 0),
+            "contract_version": event.get("contract_version", "v1"),
         },
         commit=False,
     )
@@ -364,7 +367,7 @@ def forward_event_to_timeblock(db, row):
         )
         return {"ok": False, "queued": True, "forwarded": False, "error": "timeblock config missing"}
 
-    payload = {
+    payload = apply_contract_version({
         "source_project": row["source_project"],
         "event_code": row["event_code"],
         "external_event_id": row["external_event_id"],
@@ -374,7 +377,7 @@ def forward_event_to_timeblock(db, row):
         "points_delta": int(row["points_delta"] or 0),
         "occurred_at": row["occurred_at"],
         "payload": json.loads(row["payload_json"] or "{}"),
-    }
+    })
 
     url = f"{cfg['api_base_url']}/api/projects/{cfg['project_code']}/events"
     body = canonical_json(payload).encode("utf-8")
@@ -398,16 +401,18 @@ def forward_event_to_timeblock(db, row):
                 response_json = {"raw": raw}
 
         _update_event_status(db, row["id"], status="FORWARDED", response=response_json)
-        return {"ok": True, "queued": True, "forwarded": True, "response": response_json}
+        return {"ok": True, "queued": True, "forwarded": True, "response": response_json, "status": "FORWARDED"}
 
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
         _update_event_status(db, row["id"], status="FAILED", error=f"HTTP {exc.code}: {error_body}")
-        return {"ok": False, "queued": True, "forwarded": False, "error": f"HTTP {exc.code}: {error_body}"}
+        current = get_outbound_event(db, row["id"])
+        return {"ok": False, "queued": True, "forwarded": False, "status": current["status"], "error": f"HTTP {exc.code}: {error_body}"}
 
     except Exception as exc:
         _update_event_status(db, row["id"], status="FAILED", error=str(exc))
-        return {"ok": False, "queued": True, "forwarded": False, "error": str(exc)}
+        current = get_outbound_event(db, row["id"])
+        return {"ok": False, "queued": True, "forwarded": False, "status": current["status"], "error": str(exc)}
 
 
 def get_outbound_event(db, event_id):
