@@ -1,0 +1,145 @@
+{% extends "mobile/layout.html" %}
+
+{% block title %}Timeblock Control Plane｜{{ APP_NAME }}{% endblock %}
+{% block subtitle %}Timeblock 內部點數、FGO conversion boundary、integration health{% endblock %}
+
+{% block content %}
+<section class="card" style="border-color:#bfdbfe;background:#eff6ff;">
+  <h2>Timeblock / FGO Control Plane</h2>
+  <p class="muted">
+    此頁是 FUMAP GO Admin 的 Timeblock 控制面。FUMAP GO 只負責營運與驗證事件；
+    Timeblock 負責內部點數、block ledger、wallet summary、以及未來 Timeblock points 兌換 FGO 的邊界。
+  </p>
+
+  <p>
+    <a class="btn" href="{{ integration.timeblock_webapp_url }}" target="_blank" rel="noopener">開啟 Timeblock</a>
+    <a class="btn secondary" href="/admin/blocks">查看本地 BlockFGO</a>
+    <a class="btn secondary" href="/admin">返回 Admin</a>
+  </p>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h3>Project Registry</h3>
+    <p><span class="muted">Project Code</span><br><b>{{ integration.project_code }}</b></p>
+    <p><span class="muted">source_project</span><br><b>{{ integration.source_project }}</b></p>
+    <p class="muted">Timeblock 必須使用 project-aware API，避免只 hard-code 給 FUMAP GO。</p>
+  </div>
+
+  <div class="card">
+    <h3>Integration Health</h3>
+    <p>
+      Webapp：
+      {% if integration.timeblock_webapp_url %}
+        <span class="badge ok">configured</span>
+      {% else %}
+        <span class="badge danger">missing</span>
+      {% endif %}
+    </p>
+    <p>
+      API Base URL：
+      {% if integration.timeblock_api_base_url %}
+        <span class="badge ok">configured</span>
+      {% else %}
+        <span class="badge warn">not configured</span>
+      {% endif %}
+    </p>
+    <p>
+      Project Token：
+      {% if integration.project_token_configured %}
+        <span class="badge ok">configured</span>
+      {% else %}
+        <span class="badge warn">not configured</span>
+      {% endif %}
+    </p>
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h3>Gateway Readiness</h3>
+    <p>
+      Wallet Query API：
+      {% if integration.wallet_query_ready %}
+        <span class="badge ok">ready</span>
+      {% else %}
+        <span class="badge warn">fallback UI only</span>
+      {% endif %}
+    </p>
+    <p>
+      Event Ingestion API：
+      {% if integration.event_ingestion_ready %}
+        <span class="badge ok">ready</span>
+      {% else %}
+        <span class="badge warn">planned</span>
+      {% endif %}
+    </p>
+    <p class="muted">
+      Phase 4 不開放任意寫入 DB。Reward-affecting write 必須等 Phase 5 service layer。
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>FGO Conversion Boundary</h3>
+    <p class="muted">{{ integration.conversion_boundary }}</p>
+    <p>
+      <span class="badge warn">read-only control plane</span>
+    </p>
+    <p class="muted">
+      FUMAP GO 不直接管理 blockchain wallet、不直接轉出 FGO、不直接修改 Timeblock ledger。
+    </p>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Local Operation Summary</h2>
+  <div class="grid-2">
+    <div><span class="muted">Customers</span><h3>{{ summary.customers }}</h3></div>
+    <div><span class="muted">Stores</span><h3>{{ summary.stores }}</h3></div>
+    <div><span class="muted">Shippers</span><h3>{{ summary.drivers }}</h3></div>
+    <div><span class="muted">Orders</span><h3>{{ summary.orders }}</h3></div>
+    <div><span class="muted">Local Blocks</span><h3>{{ summary.local_blocks }}</h3></div>
+    <div><span class="muted">Online Shippers</span><h3>{{ summary.online_drivers }}</h3></div>
+    <div><span class="muted">Open Stores</span><h3>{{ summary.open_stores }}</h3></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Reward Boundary</h2>
+  {% for item in reward_boundaries %}
+    <p>
+      <b>{{ item.name }}</b>
+      <span class="badge">{{ item.status }}</span><br>
+      <span class="muted">{{ item.owner }}</span>
+    </p>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Required Timeblock APIs</h2>
+  <p class="muted">Phase 5/6 sẽ bổ sung service layer và hardening dựa trên API contract này.</p>
+  {% for api in required_apis %}
+    <p><code>{{ api }}</code></p>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Recent Local Blocks Related to Admin / Reward / Timeblock</h2>
+  {% for b in recent_blocks %}
+    <p class="muted">
+      {{ b.created_at }}｜{{ b.event_type }}｜{{ b.actor_role }}<br>
+      {{ b.order_code or '-' }}｜{{ b.payload_hash[:16] if b.payload_hash else '' }}
+    </p>
+  {% else %}
+    <p class="muted">No related local blocks yet.</p>
+  {% endfor %}
+</section>
+
+<section class="card" style="border-color:#fecaca;background:#fff7f7;">
+  <h2>Security Notes</h2>
+  <p class="muted">
+    Admin console 目前只做 control surface，不提供手動改點數、手動鑄造 FGO、或任意資料庫寫入。
+    下一步若新增 API，必須包含 auth/token validation、role guard、idempotency key、source_project validation、audit log。
+  </p>
+</section>
+{% endblock %}
