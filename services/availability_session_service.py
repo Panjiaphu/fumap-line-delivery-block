@@ -32,9 +32,27 @@ def ensure_availability_session_schema(app=None):
             eligible_minutes INTEGER DEFAULT 0,
             reward_points INTEGER DEFAULT 0,
             review_reason TEXT,
+            device_fingerprint TEXT,
+            ip_hash TEXT,
+            user_agent_hash TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT
         );
+        """)
+
+        for column_sql in [
+            "ALTER TABLE availability_sessions ADD COLUMN device_fingerprint TEXT",
+            "ALTER TABLE availability_sessions ADD COLUMN ip_hash TEXT",
+            "ALTER TABLE availability_sessions ADD COLUMN user_agent_hash TEXT",
+        ]:
+            try:
+                conn.execute(column_sql)
+            except sqlite3.OperationalError:
+                pass
+
+        conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_availability_device
+        ON availability_sessions(actor_role, actor_external_id, device_fingerprint);
         """)
         conn.commit()
     finally:
