@@ -38,6 +38,23 @@ def ensure_availability_session_schema(app=None):
             created_at TEXT NOT NULL,
             updated_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS availability_reward_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_project TEXT NOT NULL DEFAULT 'fumapgo',
+            session_id INTEGER NOT NULL,
+            actor_role TEXT NOT NULL,
+            actor_external_id TEXT NOT NULL,
+            points_delta INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'PENDING_REWARD',
+            review_reason TEXT,
+            auto_review_result TEXT,
+            outbound_event_id INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            approved_at TEXT,
+            UNIQUE(session_id)
+        );
         """)
 
         for column_sql in [
@@ -53,6 +70,12 @@ def ensure_availability_session_schema(app=None):
         conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_availability_device
         ON availability_sessions(actor_role, actor_external_id, device_fingerprint);
+
+        CREATE INDEX IF NOT EXISTS idx_availability_reviews_status
+        ON availability_reward_reviews(status);
+
+        CREATE INDEX IF NOT EXISTS idx_availability_reviews_actor
+        ON availability_reward_reviews(actor_role, actor_external_id);
         """)
         conn.commit()
     finally:
